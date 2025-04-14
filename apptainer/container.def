@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+	Author hnj21@imperial.ac.uk
+
+%help
+	Use QD for latent exploration of diffusion models. 
+
+%environment
+	# Activate virtual environment permanently
+	export VIRTUAL_ENV="/venv"
+	export _OLD_VIRTUAL_PATH="$PATH"
+	export PATH="$VIRTUAL_ENV/bin:$PATH"
+
+	# System
+	export TZ=Europe/London
+	export OPENBLAS_NUM_THREADS=1
+
+%post
+	export DEBIAN_FRONTEND=noninteractive
+
+	# Update and install required libraries
+	apt update
+	apt install -y wget git software-properties-common tmux
+
+	# Install Python
+	add-apt-repository ppa:deadsnakes/ppa
+	apt install -y python3.10 python3.10-venv
+
+	# Create a virtual environment
+	python3.10 -m venv /venv
+	. /venv/bin/activate
+	python -m ensurepip
+	pip install --upgrade pip
+
+	# Set up workspace
+	mkdir /workspace/ && cd /workspace/
+
+	# Clone repository to /project/
+	git clone https://{{ gitlab_user }}:{{ gitlab_token }}@gitlab.doc.ic.ac.uk/AIRL/research_projects/hannah_janmohamed/latent_exploration.git src/ && cd src/
+	git checkout {{ commit }}
+
+	# Install requirements
+	pip install -r requirements.txt
+	pip install --upgrade typing_extensions
+	pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+%runscript
+	# Run main
+	python /workspace/src/main.py "$@"
+
