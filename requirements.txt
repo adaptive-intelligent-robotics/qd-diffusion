@@ -1,7 +1,10 @@
 --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
+absl-py
 accelerate
 brax
+chex
+diffusers
 flax
 ftfy
 hydra-core
@@ -10,22 +13,28 @@ ipython
 ipykernel
 imageio
 jax[cuda12_pip]==0.4.28
-jaxlib==0.4.28
+jaxlib
+jumanji
 matplotlib
 mediapy
 nni
 notebook
+numpy
 opencv-python
 optax
 pandas
 pillow
+protobuf
 regex
 requests
 scikit-learn
 scipy
 tensorboardx
+tensorflow-probability
 timm
 torchvision
 transformers
 tqdm
+typing-extensions
 wandb
+
