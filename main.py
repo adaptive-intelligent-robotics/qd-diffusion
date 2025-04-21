@@ -1,0 +1,350 @@
+import os
+from pathlib import Path
+import hydra
+from omegaconf import DictConfig, OmegaConf
+import torch
+import wandb
+
+from diffusers import (
+    DiffusionPipeline, 
+    StableDiffusionPipeline,
+    UNet2DConditionModel,
+    PNDMScheduler,
+    AutoencoderKL,
+    LMSDiscreteScheduler
+)
+from transformers import CLIPProcessor, CLIPModel, CLIPTextModel, CLIPTokenizer
+from feature_functions import brightness, average_hue
+from model_utils import (get_text_embeddings, 
+    generate_images_from_latents,
+    generate_image_from_genotype,
+    fitness_function,
+    save_images,
+    save_final_images
+)
+from PIL import Image
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+from functools import partial
+# from qdax.core.baselines import CMAES
+from qdax.core.emitters.mutation_operators import isoline_variation
+from qdax.core.emitters.standard_emitters import MixingEmitter
+from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids
+from qdax.core.map_elites import MAPElites
+from qdax.utils.metrics import default_qd_metrics, CSVLogger
+from qdax.utils.plotting import plot_map_elites_results
+from typing import List
+import time
+from tqdm import tqdm
+
+
+@hydra.main(config_path="config/", config_name="config.yaml", version_base="1.2")
+def main(config: DictConfig) -> None:
+    
+    # Debug logging for directories
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Original working directory: {hydra.utils.get_original_cwd()}")
+    
+    # Get Hydra's output directory
+    output_dir = hydra.core.hydra_config.HydraConfig.get().run.dir
+    print(f"Hydra output directory: {output_dir}")
+    
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialise wandb
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project=f"Latent Exploration",
+        name=f"{config.algorithm.name}",
+        # track hyperparameters and run metadata
+        config=OmegaConf.to_container(config, resolve=True),
+    )
+
+    _images_dir = os.path.join(output_dir, "images/",)
+    _metrics_dir = os.path.join(output_dir, "metrics/")
+    _repertoire_dir = os.path.join(output_dir, "repertoire/")
+
+
+    os.makedirs(_images_dir, exist_ok=True)
+    os.makedirs(_metrics_dir, exist_ok=True)
+    os.makedirs(_repertoire_dir, exist_ok=True)
+    os.makedirs(_images_dir + f"init/", exist_ok=True)
+    os.makedirs(_images_dir + f"final/", exist_ok=True)
+
+    # Load Diffusion Model Pipelines
+    vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae").cuda()
+    tokenizer = CLIPTokenizer.from_pretrained(config.model.name, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder").cuda()
+    unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet").cuda()
+    scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler")
+    
+    # Initialize random key
+    random_key = jax.random.PRNGKey(config.algorithm.seed)
+    
+    # Initialise scoring function
+    prompt_embeddings = get_text_embeddings(
+        prompt=config.generation.prompt,
+        batch_size=config.algorithm.batch_size,
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+    )
+    
+    generate_images_from_latents_fn = partial(generate_images_from_latents,
+        prompt=config.generation.prompt,
+        num_inference_steps=config.generation.num_inference_steps,
+        guidance_scale=config.generation.guidance_scale,
+        scheduler=scheduler,
+        unet=unet,
+        vae=vae,
+        tokenizer=tokenizer,
+        text_encoder=text_encoder
+    )
+    
+    generate_image_from_genotype_fn = partial(generate_image_from_genotype,
+        prompt=config.generation.prompt,
+        num_inference_steps=config.generation.num_inference_steps,
+        guidance_scale=config.generation.guidance_scale,
+        scheduler=scheduler,
+        unet=unet,
+        vae=vae,
+        tokenizer=tokenizer,
+        text_encoder=text_encoder
+    )
+    
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    
+
+    def scoring_fn(genotypes,
+        key,
+        prompt,
+        clip_model,
+        clip_processor,
+        generate_images_from_latents_fn,
+        descriptor_names: List[str],
+    ):
+        
+        # Convert jax genotypes to pytorch
+        latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
+    
+        # Generate images
+        generated_images = generate_images_from_latents_fn(latents)
+        generated_images_np = np.array([np.array(img) for img in generated_images])  
+        generated_images_jnp = jnp.array(generated_images_np, dtype=jnp.float32)  # Ensure JAX dtype
+        
+        fitnesses = fitness_function(generated_images=generated_images,
+            prompt=prompt,
+            clip_model=clip_model,
+            clip_processor=clip_processor,
+        )
+
+        descriptors = []
+          
+        # Calculate descriptors 
+        for d in descriptor_names:
+            if d == "brightness":
+                descriptor = jax.vmap(brightness)(generated_images_jnp)
+            elif d == "average_hue":
+                descriptor = jax.vmap(average_hue)(generated_images_jnp)
+            else:
+                raise ValueError(f"Descriptor {d} not found")
+            
+            descriptors.append(descriptor)
+            
+        descriptors = jnp.stack(descriptors, axis=-1)  # Shape: (, num_descriptors)
+        
+        return fitnesses, descriptors, {}
+    
+    scoring_function = partial(scoring_fn,
+        prompt=config.generation.prompt,
+        clip_model=clip_model,
+        clip_processor=clip_processor,
+        generate_images_from_latents_fn=generate_images_from_latents_fn,
+        descriptor_names=config.algorithm.descriptor_names,
+    )
+    
+    
+    key, subkey = jax.random.split(random_key)  # JAX PRNG handling
+    init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
+    init_images = generate_image_from_genotype_fn(init_genotypes)
+    save_images(init_images, iteration="init", folder=_images_dir + f"init/")
+    
+    if config.algorithm.name == "cma_es":
+        
+        return 
+        # # Initialize CMA-ES
+        # cma_es = CMAES(
+        #     population_size=config.algorithm.cma_es.population_size,
+        #     sigma=config.algorithm.cma_es.sigma,
+        # )
+        
+    #     # Initialize state
+    #     state = cma_es.init(
+    #         init_params=jnp.array([7.5, 50.0]),  # Initial values for guidance_scale and num_inference_steps
+    #         random_key=random_key,
+    #     )
+        
+    #     # Run optimization
+    #     for iteration in range(config.algorithm.cma_es.max_iterations):
+    #         # Generate new parameters
+    #         params, state = cma_es.ask(state)
+            
+    #         # Evaluate parameters
+    #         fitnesses = jax.vmap(evaluate_params)(params)[0]  # Only take fitness, ignore descriptors
+            
+    #         # Update state
+    #         state = cma_es.tell(state, fitnesses)
+            
+    #         # Get best parameters
+    #         best_params = state.best_params
+    #         best_fitness = state.best_fitness
+            
+    #         # Generate and save best image
+    #         best_image = pipe(
+    #             prompt=config.generation.prompt,
+    #             negative_prompt=config.generation.negative_prompt,
+    #             num_inference_steps=int(best_params[1]),
+    #             guidance_scale=float(best_params[0]),
+    #             num_images_per_prompt=1,
+    #             height=config.generation.height,
+    #             width=config.generation.width,
+    #         ).images[0]
+            
+    #         # Save best image
+    #         image_path = output_dir / f"best_iteration_{iteration}.{config.output.save_format}"
+    #         best_image.save(image_path)
+            
+    #         print(f"Iteration {iteration}: Best fitness {best_fitness:.4f}")
+    #         print(f"Parameters: guidance_scale={best_params[0]:.2f}, num_inference_steps={int(best_params[1])}")
+            
+    #         # Check if target fitness is reached
+    #         if best_fitness >= config.algorithm.cma_es.target_fitness:
+    #             print(f"Target fitness reached at iteration {iteration}")
+    #             break
+        
+    #     # Save final best image
+    #     image_path = output_dir / f"final_best.{config.output.save_format}"
+    #     best_image.save(image_path)
+    #     print(f"Final best fitness: {best_fitness:.4f}")
+    #     print(f"Final parameters: guidance_scale={best_params[0]:.2f}, num_inference_steps={int(best_params[1])}")
+    
+    elif config.algorithm.name == "map_elites":
+        
+        # Define a metrics function
+        variation_fn = partial(
+            isoline_variation, iso_sigma=config.algorithm.iso_sigma, line_sigma=config.algorithm.line_sigma
+        )
+
+        mixing_emitter = MixingEmitter(
+            mutation_fn=None,
+            variation_fn=variation_fn,
+            variation_percentage=1.0,
+            batch_size=config.algorithm.batch_size
+        )
+       # Instantiate MAP-Elites
+        map_elites = MAPElites(
+            scoring_function=None,
+            emitter=mixing_emitter,
+            metrics_function=partial(default_qd_metrics, qd_offset=0.0),
+        )
+
+        # Compute the centroids
+        key, subkey = jax.random.split(key)
+        centroids = compute_cvt_centroids(
+            num_descriptors=2,
+            num_init_cvt_samples=config.algorithm.map_elites.num_init_cvt_samples,
+            num_centroids=config.algorithm.map_elites.num_centroids,
+            minval=config.algorithm.map_elites.min_descriptor,
+            maxval=config.algorithm.map_elites.max_descriptor,
+            key=subkey,
+        )
+        
+        # Evaluate the initial population
+        key, subkey = jax.random.split(key)
+        fitnesses, descriptors, extra_scores = scoring_function(init_genotypes, subkey)
+        
+        
+        # Compute initial repertoire and emitter state
+        repertoire, emitter_state, metrics = map_elites.init_ask_tell(
+            genotypes=init_genotypes,
+            fitnesses=fitnesses,
+            descriptors=descriptors,
+            centroids=centroids,
+            key=key,
+            extra_scores=extra_scores,
+        )
+        
+        
+        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
+        csv_logger = CSVLogger(
+            filename=_metrics_dir + f"mapelites-logs.csv",
+            header=list(metrics.keys())
+        )
+
+        # Main loop
+        for i in tqdm(range(config.algorithm.map_elites.max_iterations)):
+            start_time = time.time()
+            key, subkey = jax.random.split(key)
+            # Generate solutions
+            genotypes, extra_info = map_elites.ask(repertoire, emitter_state, subkey)
+
+            # Evaluate solutions: get fitness, descriptor and extra scores.
+            # This is where custom evaluations on CPU or GPU can be added.
+            key, subkey = jax.random.split(key)
+            fitnesses, descriptors, extra_scores = scoring_function(genotypes, subkey)
+
+            # Update MAP-Elites
+            repertoire, emitter_state, current_metrics = map_elites.tell(
+                genotypes=genotypes,
+                fitnesses=fitnesses,
+                descriptors=descriptors,
+                repertoire=repertoire,
+                emitter_state=emitter_state,
+                extra_scores=extra_scores,
+                extra_info=extra_info,
+            )
+
+            timelapse = time.time() - start_time
+
+            # Metrics
+            current_metrics["iteration"] = i
+            current_metrics["time"] =timelapse
+            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
+            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
+
+            # Log
+            csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
+        
+        # Plot results
+        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
+            metrics=metrics,
+            repertoire=repertoire,
+            min_descriptor=config.algorithm.map_elites.min_descriptor,
+            max_descriptor=config.algorithm.map_elites.max_descriptor
+        )
+        fig.savefig(_images_dir + f"mapelites-results.png")
+        
+        # Save final repertoire
+        np.savez(_repertoire_dir + f"final_repertoire.npz", genotypes=repertoire.genotypes, descriptors=repertoire.descriptors, fitnesses=repertoire.fitnesses, centroids=centroids)
+        
+        # Save final images
+        save_final_images(repertoire,
+            config.generation.prompt,
+            config.generation.num_inference_steps,
+            config.generation.guidance_scale,
+            scheduler,
+            unet,
+            vae,
+            tokenizer,
+            text_encoder,
+            n_sample=5,
+            folder=_images_dir + f"final/"
+        )
+        
+    
+
+if __name__ == "__main__":
+    main() 

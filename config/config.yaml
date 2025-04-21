@@ -1,0 +1,52 @@
+hydra:
+    run:
+        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
+    sweep:
+        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}
+    output_subdir: .
+
+defaults:
+  - _self_
+
+# Model configuration
+model:
+  name: "stabilityai/stable-diffusion-2-1"
+  device: "cuda"  # or "cpu"
+  torch_dtype: "float16"  # or "float32"
+
+# Generation parameters
+generation:
+  prompt: "A dog riding a motorbike"
+  num_inference_steps: 50
+  guidance_scale: 7.5
+  negative_prompt: ""
+  num_images_per_prompt: 1
+  height: 512
+  width: 512
+
+# Algorithm configuration
+algorithm:
+  name: "map_elites"  # or "map_elites" or "direct" for direct generation without optimization
+  seed: 42
+  descriptor_names: ["brightness", "average_hue"]
+  iso_sigma: 0.005
+  line_sigma: 0.05
+  batch_size: 4
+
+  cma_es:
+    population_size: 10
+    sigma: 1.0
+    max_iterations: 50
+    target_fitness: 0.95
+  map_elites:
+    num_init_cvt_samples: 50000
+    num_centroids: 1024
+    max_iterations: 10
+    min_descriptor: 0.0
+    max_descriptor: 255.0
+
+# Output configuration
+output:
+  save_format: "png"
+
+# ... existing code ... 
