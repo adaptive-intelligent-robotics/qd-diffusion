@@ -13,6 +13,9 @@ From: ubuntu:22.04
 	export _OLD_VIRTUAL_PATH="$PATH"
 	export PATH="$VIRTUAL_ENV/bin:$PATH"
 
+        # Add QDax env to python path
+        export PYTHONPATH=/workspace/src/QDax:$PYTHONPATH
+
 	# System
 	export TZ=Europe/London
 	export OPENBLAS_NUM_THREADS=1
@@ -43,10 +46,9 @@ From: ubuntu:22.04
 
 	# Install requirements
 	pip install -r requirements.txt
-	pip install --upgrade typing_extensions
-	pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+	pip install --upgrade diffusers[flax]
 
+	
 %runscript
 	# Run main
 	python /workspace/src/main.py "$@"
-
