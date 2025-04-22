@@ -13,8 +13,9 @@ From: ubuntu:22.04
 	export _OLD_VIRTUAL_PATH="$PATH"
 	export PATH="$VIRTUAL_ENV/bin:$PATH"
 
-        # Add QDax env to python path
-        export PYTHONPATH=/workspace/src/QDax:$PYTHONPATH
+    # Add submodules to python path
+    export PYTHONPATH=/workspace/src/QDax:$PYTHONPATH
+	export PYTHONPATH=/workspace/src/APDDv2:$PYTHONPATH
 
 	# System
 	export TZ=Europe/London
