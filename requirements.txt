@@ -37,5 +37,4 @@ transformers
 tqdm
 typing-extensions
 wandb
-qdax>=0.5.0
 
