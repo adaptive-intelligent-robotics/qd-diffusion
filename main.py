@@ -5,6 +5,8 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
 
+from APDDv2.demo import load_model, get_score
+import APDDv2.models.clip as clip
 from diffusers import (
     DiffusionPipeline, 
     StableDiffusionPipeline,
@@ -14,7 +16,12 @@ from diffusers import (
     LMSDiscreteScheduler
 )
 from transformers import CLIPProcessor, CLIPModel, CLIPTextModel, CLIPTokenizer
-from feature_functions import brightness, average_hue
+from feature_functions import (
+    brightness,
+    average_hue,
+    get_artclip_score_model,
+)
+
 from model_utils import (get_text_embeddings, 
     generate_images_from_latents,
     generate_image_from_genotype,
@@ -35,7 +42,7 @@ from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids
 from qdax.core.map_elites import MAPElites
 from qdax.utils.metrics import default_qd_metrics, CSVLogger
 from qdax.utils.plotting import plot_map_elites_results
-from typing import List
+from typing import Callable, List
 import time
 from tqdm import tqdm
 
@@ -117,14 +124,45 @@ def main(config: DictConfig) -> None:
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     
-
+    descriptor_functions = []
+    
+    for d in config.algorithm.descriptor_names:
+        if d == "brightness":
+            descriptor_functions.append(brightness)
+        elif d == "average_hue":
+            descriptor_functions.append(average_hue)
+        elif d == "artclip_score":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "theme_and_logic":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "creativity":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "layout_and_composition":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "space_and_perspective":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "sense_of_order":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "light_and_shadow":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "color":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "details_and_texture":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "overall":
+            descriptor_functions.append(get_artclip_score_model(d))
+        elif d == "mood":
+            descriptor_functions.append(get_artclip_score_model(d))
+        else:
+            raise ValueError(f"Descriptor function {d} not found")
+    
     def scoring_fn(genotypes,
         key,
         prompt,
         clip_model,
         clip_processor,
         generate_images_from_latents_fn,
-        descriptor_names: List[str],
+        descriptor_functions: List[Callable]
     ):
         
         # Convert jax genotypes to pytorch
@@ -142,16 +180,9 @@ def main(config: DictConfig) -> None:
         )
 
         descriptors = []
-          
-        # Calculate descriptors 
-        for d in descriptor_names:
-            if d == "brightness":
-                descriptor = jax.vmap(brightness)(generated_images_jnp)
-            elif d == "average_hue":
-                descriptor = jax.vmap(average_hue)(generated_images_jnp)
-            else:
-                raise ValueError(f"Descriptor {d} not found")
-            
+        
+        for d_fun in descriptor_functions:
+            descriptor = jnp.array([d_fun(image) for image in generated_images_np])           
             descriptors.append(descriptor)
             
         descriptors = jnp.stack(descriptors, axis=-1)  # Shape: (, num_descriptors)
@@ -163,7 +194,7 @@ def main(config: DictConfig) -> None:
         clip_model=clip_model,
         clip_processor=clip_processor,
         generate_images_from_latents_fn=generate_images_from_latents_fn,
-        descriptor_names=config.algorithm.descriptor_names,
+        descriptor_functions=descriptor_functions,
     )
     
     
