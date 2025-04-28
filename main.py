@@ -35,7 +35,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
-# from qdax.core.baselines import CMAES
+from qdax.baselines.cmaes import CMAES
 from qdax.core.emitters.mutation_operators import isoline_variation
 from qdax.core.emitters.standard_emitters import MixingEmitter
 from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids
@@ -155,21 +155,19 @@ def main(config: DictConfig) -> None:
             descriptor_functions.append(get_artclip_score_model(d))
         else:
             raise ValueError(f"Descriptor function {d} not found")
-    
-    def scoring_fn(genotypes,
-        key,
-        prompt,
-        clip_model,
-        clip_processor,
-        generate_images_from_latents_fn,
-        descriptor_functions: List[Callable]
-    ):
         
+    
+    def fitness_fn(
+        genotypes,
+        generate_images_from_latents_fun,
+        prompt,
+    ):
+    
         # Convert jax genotypes to pytorch
         latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
     
         # Generate images
-        generated_images = generate_images_from_latents_fn(latents)
+        generated_images = generate_images_from_latents_fun(latents)
         generated_images_np = np.array([np.array(img) for img in generated_images])  
         generated_images_jnp = jnp.array(generated_images_np, dtype=jnp.float32)  # Ensure JAX dtype
         
@@ -178,7 +176,20 @@ def main(config: DictConfig) -> None:
             clip_model=clip_model,
             clip_processor=clip_processor,
         )
+        
+        return fitnesses, generated_images_np
 
+    def scoring_fn(genotypes,
+        key,
+        prompt,
+        clip_model,
+        clip_processor,
+        generate_images_from_latents_fun,
+        descriptor_functions: List[Callable]
+    ):
+        
+        fitnesses, generated_images_np = fitness_fn(genotypes, generate_images_from_latents_fun, prompt)
+        
         descriptors = []
         
         for d_fun in descriptor_functions:
@@ -189,80 +200,108 @@ def main(config: DictConfig) -> None:
         
         return fitnesses, descriptors, {}
     
-    scoring_function = partial(scoring_fn,
-        prompt=config.generation.prompt,
-        clip_model=clip_model,
-        clip_processor=clip_processor,
-        generate_images_from_latents_fn=generate_images_from_latents_fn,
-        descriptor_functions=descriptor_functions,
-    )
-    
-    
-    key, subkey = jax.random.split(random_key)  # JAX PRNG handling
-    init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
-    init_images = generate_image_from_genotype_fn(init_genotypes)
-    save_images(init_images, iteration="init", folder=_images_dir + f"init/")
     
     if config.algorithm.name == "cma_es":
         
-        return 
-        # # Initialize CMA-ES
-        # cma_es = CMAES(
-        #     population_size=config.algorithm.cma_es.population_size,
-        #     sigma=config.algorithm.cma_es.sigma,
-        # )
+        def cma_es_fitness_fn(
+            genotypes, 
+            generate_images_from_latents_fun,
+            prompt,
+            batch_size,
+        ):
+            image_genotypes = jnp.reshape(genotypes, (batch_size, 4, 64, 64))
+            
+            fitnesses, _ = fitness_fn(image_genotypes, generate_images_from_latents_fun, prompt)
+                        
+            return fitnesses.squeeze()
         
-    #     # Initialize state
-    #     state = cma_es.init(
-    #         init_params=jnp.array([7.5, 50.0]),  # Initial values for guidance_scale and num_inference_steps
-    #         random_key=random_key,
-    #     )
+        partial_fitness_fn = partial(cma_es_fitness_fn,
+            generate_images_from_latents_fun=generate_images_from_latents_fn,
+            prompt=config.generation.prompt,
+            batch_size=config.algorithm.cma_es.population_size,
+            )
+            
+        # Initialize CMA-ES
+        key, subkey = jax.random.split(random_key)
+        cmaes = CMAES(
+            population_size=config.algorithm.cma_es.population_size,
+            num_best=config.algorithm.cma_es.num_best,
+            search_dim=4*64*64,
+            fitness_function=partial_fitness_fn,
+            mean_init=jax.random.normal(subkey, shape=(4*64*64,), dtype=jnp.float32),
+            init_sigma=config.algorithm.cma_es.sigma,
+            delay_eigen_decomposition=config.algorithm.cma_es.delay_eigen_decomposition,
+        )
         
-    #     # Run optimization
-    #     for iteration in range(config.algorithm.cma_es.max_iterations):
-    #         # Generate new parameters
-    #         params, state = cma_es.ask(state)
-            
-    #         # Evaluate parameters
-    #         fitnesses = jax.vmap(evaluate_params)(params)[0]  # Only take fitness, ignore descriptors
-            
-    #         # Update state
-    #         state = cma_es.tell(state, fitnesses)
-            
-    #         # Get best parameters
-    #         best_params = state.best_params
-    #         best_fitness = state.best_fitness
-            
-    #         # Generate and save best image
-    #         best_image = pipe(
-    #             prompt=config.generation.prompt,
-    #             negative_prompt=config.generation.negative_prompt,
-    #             num_inference_steps=int(best_params[1]),
-    #             guidance_scale=float(best_params[0]),
-    #             num_images_per_prompt=1,
-    #             height=config.generation.height,
-    #             width=config.generation.width,
-    #         ).images[0]
-            
-    #         # Save best image
-    #         image_path = output_dir / f"best_iteration_{iteration}.{config.output.save_format}"
-    #         best_image.save(image_path)
-            
-    #         print(f"Iteration {iteration}: Best fitness {best_fitness:.4f}")
-    #         print(f"Parameters: guidance_scale={best_params[0]:.2f}, num_inference_steps={int(best_params[1])}")
-            
-    #         # Check if target fitness is reached
-    #         if best_fitness >= config.algorithm.cma_es.target_fitness:
-    #             print(f"Target fitness reached at iteration {iteration}")
-    #             break
+        state = cmaes.init()
         
-    #     # Save final best image
-    #     image_path = output_dir / f"final_best.{config.output.save_format}"
-    #     best_image.save(image_path)
-    #     print(f"Final best fitness: {best_fitness:.4f}")
-    #     print(f"Final parameters: guidance_scale={best_params[0]:.2f}, num_inference_steps={int(best_params[1])}")
-    
+        # Save initial mean image
+        init_samples_images = jnp.reshape(state.mean, (1, 4, 64, 64))
+        init_images = generate_image_from_genotype_fn(init_samples_images)
+        save_images(init_images, iteration="init", folder=_images_dir + f"init/")
+        
+        means = [state.mean]
+        covs = [(state.sigma**2) * state.cov_matrix]
+        
+        metrics = dict.fromkeys(["iteration", "max_fitness", "time"], jnp.array([]))
+        csv_logger = CSVLogger(
+            filename=_metrics_dir + f"cmaes-logs.csv",
+            header=list(metrics.keys())
+        )
+        
+        # Run optimization
+        iteration_count = 0
+        for _ in tqdm(range(config.algorithm.cma_es.max_iterations)):
+            iteration_count += 1
+
+            # Sample, sample_size = population_size
+            samples, random_key = cmaes.sample(state, random_key)
+
+            # udpate
+            state = cmaes.update(state, samples)
+
+            # check stop condition
+            stop_condition = cmaes.stop_condition(state)
+
+            if stop_condition:
+                break
+
+            # store data for plotting
+            means.append(state.mean)
+            covs.append((state.sigma**2) * state.cov_matrix)
+
+        print("Num iterations before stop condition: ", iteration_count)
+        
+        # Checking final fitness values
+        fitnesses = partial_fitness_fn(samples)
+        print("Min fitness in the final population: ", jnp.min(fitnesses))
+        print("Mean fitness in the final population: ", jnp.mean(fitnesses))
+        print("Max fitness in the final population: ", jnp.max(fitnesses))
+        
+        # Save final images
+        image_samples = jnp.reshape(samples, (config.algorithm.cma_es.population_size, 4, 64, 64))
+        final_images = generate_image_from_genotype_fn(image_samples)
+        save_images(final_images, iteration="final", folder=_images_dir + f"final/")
+  
+        # Save final repertoire
+        np.savez(_repertoire_dir + f"final_repertoire.npz", genotypes=image_samples, fitnesses=fitnesses)
+        
+   
     elif config.algorithm.name == "map_elites":
+        
+        scoring_function = partial(scoring_fn,
+            prompt=config.generation.prompt,
+            clip_model=clip_model,
+            clip_processor=clip_processor,
+            generate_images_from_latents_fun=generate_images_from_latents_fn,
+            descriptor_functions=descriptor_functions,
+        )
+        
+    
+        key, subkey = jax.random.split(random_key)  # JAX PRNG handling
+        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
+        init_images = generate_image_from_genotype_fn(init_genotypes)
+        save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         # Define a metrics function
         variation_fn = partial(
