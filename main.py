@@ -38,7 +38,7 @@ from functools import partial
 from qdax.baselines.cmaes import CMAES
 from qdax.core.emitters.mutation_operators import isoline_variation
 from qdax.core.emitters.standard_emitters import MixingEmitter
-from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids
+from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids, MapElitesRepertoire
 from qdax.core.map_elites import MAPElites
 from qdax.utils.metrics import default_qd_metrics, CSVLogger
 from qdax.utils.plotting import plot_map_elites_results
@@ -89,7 +89,7 @@ def main(config: DictConfig) -> None:
     scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler")
     
     # Initialize random key
-    random_key = jax.random.PRNGKey(config.algorithm.seed)
+    key = jax.random.PRNGKey(config.algorithm.seed)
     
     # Initialise scoring function
     prompt_embeddings = get_text_embeddings(
@@ -156,13 +156,16 @@ def main(config: DictConfig) -> None:
         else:
             raise ValueError(f"Descriptor function {d} not found")
         
-    
-    def fitness_fn(
-        genotypes,
-        generate_images_from_latents_fun,
+
+    def scoring_fn(genotypes,
+        key,
         prompt,
+        clip_model,
+        clip_processor,
+        generate_images_from_latents_fun,
+        descriptor_functions: List[Callable]
     ):
-    
+        
         # Convert jax genotypes to pytorch
         latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
     
@@ -176,20 +179,7 @@ def main(config: DictConfig) -> None:
             clip_model=clip_model,
             clip_processor=clip_processor,
         )
-        
-        return fitnesses, generated_images_np
-
-    def scoring_fn(genotypes,
-        key,
-        prompt,
-        clip_model,
-        clip_processor,
-        generate_images_from_latents_fun,
-        descriptor_functions: List[Callable]
-    ):
-        
-        fitnesses, generated_images_np = fitness_fn(genotypes, generate_images_from_latents_fun, prompt)
-        
+                
         descriptors = []
         
         for d_fun in descriptor_functions:
@@ -199,30 +189,53 @@ def main(config: DictConfig) -> None:
         descriptors = jnp.stack(descriptors, axis=-1)  # Shape: (, num_descriptors)
         
         return fitnesses, descriptors, {}
-    
-    
+
+    scoring_function = partial(scoring_fn,
+        prompt=config.generation.prompt,
+        clip_model=clip_model,
+        clip_processor=clip_processor,
+        generate_images_from_latents_fun=generate_images_from_latents_fn,
+        descriptor_functions=descriptor_functions,
+    )
+
+    # Compute the MAP-Elites centroids
+    key, subkey = jax.random.split(key)
+    centroids = compute_cvt_centroids(
+        num_descriptors=2,
+        num_init_cvt_samples=config.algorithm.map_elites.num_init_cvt_samples,
+        num_centroids=config.algorithm.map_elites.num_centroids,
+        minval=config.algorithm.map_elites.min_descriptor,
+        maxval=config.algorithm.map_elites.max_descriptor,
+        key=subkey,
+    )
+        
+    map_elites_metrics_fn = partial(default_qd_metrics, qd_offset=0.0)
+        
     if config.algorithm.name == "cma_es":
         
-        def cma_es_fitness_fn(
+        def cma_es_scoring_fn(
             genotypes, 
-            generate_images_from_latents_fun,
-            prompt,
+            key,
             batch_size,
         ):
             image_genotypes = jnp.reshape(genotypes, (batch_size, 4, 64, 64))
-            
-            fitnesses, _ = fitness_fn(image_genotypes, generate_images_from_latents_fun, prompt)
-                        
-            return fitnesses.squeeze()
         
-        partial_fitness_fn = partial(cma_es_fitness_fn,
-            generate_images_from_latents_fun=generate_images_from_latents_fn,
-            prompt=config.generation.prompt,
+            fitnesses, descriptors, _ = scoring_function(image_genotypes, key)
+                                    
+            return fitnesses.squeeze(), descriptors.squeeze()
+        
+        partial_fitness_fn = partial(cma_es_scoring_fn,
             batch_size=config.algorithm.cma_es.population_size,
-            )
+        )
+
+        # Create empty repertoire with default values
+        passive_repertoire = MapElitesRepertoire.init_default(
+            genotype=jnp.zeros((4, 64, 64)), 
+            centroids=centroids
+        )
             
         # Initialize CMA-ES
-        key, subkey = jax.random.split(random_key)
+        key, subkey = jax.random.split(key)
         cmaes = CMAES(
             population_size=config.algorithm.cma_es.population_size,
             num_best=config.algorithm.cma_es.num_best,
@@ -240,25 +253,42 @@ def main(config: DictConfig) -> None:
         init_images = generate_image_from_genotype_fn(init_samples_images)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
-        means = [state.mean]
-        covs = [(state.sigma**2) * state.cov_matrix]
-        
-        metrics = dict.fromkeys(["iteration", "max_fitness", "time"], jnp.array([]))
+        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
         csv_logger = CSVLogger(
             filename=_metrics_dir + f"cmaes-logs.csv",
             header=list(metrics.keys())
         )
         
         # Run optimization
-        iteration_count = 0
-        for _ in tqdm(range(config.algorithm.cma_es.max_iterations)):
-            iteration_count += 1
+        for i in tqdm(range(config.algorithm.cma_es.max_iterations)):
+            start_time = time.time()
 
             # Sample, sample_size = population_size
-            samples, random_key = cmaes.sample(state, random_key)
+            samples, key = cmaes.sample(state, key)
 
             # udpate
-            state = cmaes.update(state, samples)
+            key, subkey = jax.random.split(key)
+            state, fitnesses, descriptors = cmaes.update(state, samples, subkey)
+            
+            # Add initial samples
+            passive_repertoire = passive_repertoire.add(
+                jnp.reshape(samples, (config.algorithm.cma_es.population_size, 4, 64, 64)),
+                descriptors,
+                fitnesses
+            )
+            current_metrics = map_elites_metrics_fn(passive_repertoire)
+                        
+            timelapse = time.time() - start_time
+
+            # Metrics
+            current_metrics["iteration"] = i
+            current_metrics["time"] = timelapse
+
+            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
+            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
+
+            # Log
+            csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
 
             # check stop condition
             stop_condition = cmaes.stop_condition(state)
@@ -266,39 +296,45 @@ def main(config: DictConfig) -> None:
             if stop_condition:
                 break
 
-            # store data for plotting
-            means.append(state.mean)
-            covs.append((state.sigma**2) * state.cov_matrix)
 
-        print("Num iterations before stop condition: ", iteration_count)
+        print("Num iterations before stop condition: ", i)
+               
+        # Plot results
+        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
+            metrics=metrics,
+            repertoire=passive_repertoire,
+            min_descriptor=config.algorithm.map_elites.min_descriptor,
+            max_descriptor=config.algorithm.map_elites.max_descriptor
+        )
+        fig.savefig(_images_dir + f"passive_repertoire-results.png")
         
-        # Checking final fitness values
-        fitnesses = partial_fitness_fn(samples)
-        print("Min fitness in the final population: ", jnp.min(fitnesses))
-        print("Mean fitness in the final population: ", jnp.mean(fitnesses))
-        print("Max fitness in the final population: ", jnp.max(fitnesses))
+        # Save final repertoire
+        np.savez(_repertoire_dir + f"final_passive_repertoire.npz", 
+            genotypes=passive_repertoire.genotypes,
+            descriptors=passive_repertoire.descriptors,
+            fitnesses=passive_repertoire.fitnesses,
+            centroids=centroids
+        )
         
         # Save final images
-        image_samples = jnp.reshape(samples, (config.algorithm.cma_es.population_size, 4, 64, 64))
-        final_images = generate_image_from_genotype_fn(image_samples)
-        save_images(final_images, iteration="final", folder=_images_dir + f"final/")
-  
-        # Save final repertoire
-        np.savez(_repertoire_dir + f"final_repertoire.npz", genotypes=image_samples, fitnesses=fitnesses)
-        
+        save_final_images(passive_repertoire,
+            config.generation.prompt,
+            config.generation.num_inference_steps,
+            config.generation.guidance_scale,
+            scheduler,
+            unet,
+            vae,
+            tokenizer,
+            text_encoder,
+            n_sample=5,
+            folder=_images_dir + f"final/"
+        )
+                
    
     elif config.algorithm.name == "map_elites":
         
-        scoring_function = partial(scoring_fn,
-            prompt=config.generation.prompt,
-            clip_model=clip_model,
-            clip_processor=clip_processor,
-            generate_images_from_latents_fun=generate_images_from_latents_fn,
-            descriptor_functions=descriptor_functions,
-        )
-        
     
-        key, subkey = jax.random.split(random_key)  # JAX PRNG handling
+        key, subkey = jax.random.split(key)  # JAX PRNG handling
         init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
         init_images = generate_image_from_genotype_fn(init_genotypes)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
@@ -318,18 +354,7 @@ def main(config: DictConfig) -> None:
         map_elites = MAPElites(
             scoring_function=None,
             emitter=mixing_emitter,
-            metrics_function=partial(default_qd_metrics, qd_offset=0.0),
-        )
-
-        # Compute the centroids
-        key, subkey = jax.random.split(key)
-        centroids = compute_cvt_centroids(
-            num_descriptors=2,
-            num_init_cvt_samples=config.algorithm.map_elites.num_init_cvt_samples,
-            num_centroids=config.algorithm.map_elites.num_centroids,
-            minval=config.algorithm.map_elites.min_descriptor,
-            maxval=config.algorithm.map_elites.max_descriptor,
-            key=subkey,
+            metrics_function=map_elites_metrics_fn,
         )
         
         # Evaluate the initial population
@@ -381,7 +406,7 @@ def main(config: DictConfig) -> None:
 
             # Metrics
             current_metrics["iteration"] = i
-            current_metrics["time"] =timelapse
+            current_metrics["time"] = timelapse
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
@@ -398,7 +423,12 @@ def main(config: DictConfig) -> None:
         fig.savefig(_images_dir + f"mapelites-results.png")
         
         # Save final repertoire
-        np.savez(_repertoire_dir + f"final_repertoire.npz", genotypes=repertoire.genotypes, descriptors=repertoire.descriptors, fitnesses=repertoire.fitnesses, centroids=centroids)
+        np.savez(_repertoire_dir + f"final_repertoire.npz",
+            genotypes=repertoire.genotypes,
+            descriptors=repertoire.descriptors,
+            fitnesses=repertoire.fitnesses,
+            centroids=centroids
+        )
         
         # Save final images
         save_final_images(repertoire,
