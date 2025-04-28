@@ -187,24 +187,30 @@ def save_final_images(repertoire,
         filename = f"final_image_{fitness[0]}_{descriptor[0]:.4f}_{descriptor[1]:.4f}.png"
         filenames.append(filename)
 
-    # Step 1: Find the genotype with the highest fitness
-    best_fitness_idx = np.argmax(fitnesses)
-    best_genotype = valid_genotypes[best_fitness_idx]
-    best_filename = filenames[best_fitness_idx]
+    # Check if we have enough valid genotypes
+    if len(valid_genotypes) <= n_sample + 1:  # +1 for the best genotype
+        # If not enough, use all valid genotypes
+        combined_genotypes = valid_genotypes
+        combined_filenames = filenames
+    else:
+        # Step 1: Find the genotype with the highest fitness
+        best_fitness_idx = np.argmax(fitnesses)
+        best_genotype = valid_genotypes[best_fitness_idx]
+        best_filename = filenames[best_fitness_idx]
 
-    # Step 2: Sample `n_sample` other valid genotypes (and filenames)
-    # Remove the best genotype from the valid genotypes list to avoid selecting it again
-    remaining_genotypes = valid_genotypes[:best_fitness_idx] + valid_genotypes[best_fitness_idx+1:]
-    remaining_filenames = filenames[:best_fitness_idx] + filenames[best_fitness_idx+1:]
-    
-    # Sample `n_sample` from the remaining genotypes and filenames
-    sampled_genotypes_indices = random.sample(range(len(remaining_genotypes)), n_sample)
-    sampled_genotypes = [remaining_genotypes[i] for i in sampled_genotypes_indices]
-    sampled_filenames = [remaining_filenames[i] for i in sampled_genotypes_indices]
+        # Step 2: Sample `n_sample` other valid genotypes (and filenames)
+        # Remove the best genotype from the valid genotypes list to avoid selecting it again
+        remaining_genotypes = valid_genotypes[:best_fitness_idx] + valid_genotypes[best_fitness_idx+1:]
+        remaining_filenames = filenames[:best_fitness_idx] + filenames[best_fitness_idx+1:]
+        
+        # Sample `n_sample` from the remaining genotypes and filenames
+        sampled_genotypes_indices = random.sample(range(len(remaining_genotypes)), n_sample)
+        sampled_genotypes = [remaining_genotypes[i] for i in sampled_genotypes_indices]
+        sampled_filenames = [remaining_filenames[i] for i in sampled_genotypes_indices]
 
-    # Combine the best genotype with the sampled ones
-    combined_genotypes = [best_genotype] + sampled_genotypes
-    combined_filenames = [best_filename] + sampled_filenames
+        # Combine the best genotype with the sampled ones
+        combined_genotypes = [best_genotype] + sampled_genotypes
+        combined_filenames = [best_filename] + sampled_filenames
     
     # Step 3: Generate images from combined genotypes
     final_images = generate_image_from_genotype(
