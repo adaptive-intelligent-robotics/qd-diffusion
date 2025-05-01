@@ -294,18 +294,18 @@ def main(config: DictConfig) -> None:
             # Metrics
             current_metrics["iteration"] = i
             current_metrics["time"] = timelapse
-
-            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
-            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
-
+            
             # Log
             wandb.log(current_metrics)
-            csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
+            csv_logger.log(current_metrics)
             logger.warning(f"--- ITERATION: {i} ---")
-            logger.warning(f"MOQD Score: {current_metrics['moqd_score']:.2f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
             logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
-            logger.warning("Max Fitnesses:" +  str(current_metrics['max_fitnesses']))
-
+            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+            
+            # Concatenate
+            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
+            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
             # check stop condition
             stop_condition = cmaes.stop_condition(state)
@@ -425,16 +425,20 @@ def main(config: DictConfig) -> None:
             # Metrics
             current_metrics["iteration"] = i
             current_metrics["time"] = timelapse
-            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
-            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
             # Log
             wandb.log(current_metrics)
-            csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
+            csv_logger.log(current_metrics)
             logger.warning(f"--- ITERATION: {i} ---")
-            logger.warning(f"MOQD Score: {current_metrics['moqd_score']:.2f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
             logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
-            logger.warning("Max Fitnesses:" +  str(current_metrics['max_fitnesses']))
+            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+            
+            # Concatenate
+            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
+            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
+
+
                    
         # Plot results
         fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
