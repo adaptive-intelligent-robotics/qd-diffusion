@@ -10,7 +10,7 @@ defaults:
 
 # Model configuration
 model:
-  name: "stabilityai/stable-diffusion-2-1"
+  name: "stabilityai/sd-turbo"
   device: "cuda"  # or "cpu"
   torch_dtype: "float16"  # or "float32"
 
@@ -21,8 +21,6 @@ generation:
   guidance_scale: 7.5
   negative_prompt: ""
   num_images_per_prompt: 1
-  height: 512
-  width: 512
 
 # Algorithm configuration
 algorithm:

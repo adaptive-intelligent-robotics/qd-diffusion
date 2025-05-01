@@ -82,11 +82,11 @@ def main(config: DictConfig) -> None:
     os.makedirs(_images_dir + f"final/", exist_ok=True)
 
     # Load Diffusion Model Pipelines
-    vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae").cuda()
-    tokenizer = CLIPTokenizer.from_pretrained(config.model.name, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder").cuda()
-    unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet").cuda()
-    scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler")
+    vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae", torch_dtype=torch.float16).cuda()
+    tokenizer = CLIPTokenizer.from_pretrained(config.model.name, subfolder="tokenizer", torch_dtype=torch.float16)
+    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float16).cuda()
+    unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet", torch_dtype=torch.float16).cuda()
+    scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler", torch_dtype=torch.float16)
     
     # Initialize random key
     key = jax.random.PRNGKey(config.algorithm.seed)
@@ -167,12 +167,12 @@ def main(config: DictConfig) -> None:
     ):
         
         # Convert jax genotypes to pytorch
-        latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
+        latents = torch.tensor(np.array(genotypes), dtype=torch.float16).cuda()    
     
         # Generate images
         generated_images = generate_images_from_latents_fun(latents)
         generated_images_np = np.array([np.array(img) for img in generated_images])  
-        generated_images_jnp = jnp.array(generated_images_np, dtype=jnp.float32)  # Ensure JAX dtype
+        generated_images_jnp = jnp.array(generated_images_np, dtype=jnp.float16)  # Ensure JAX dtype
         
         fitnesses = fitness_function(generated_images=generated_images,
             prompt=prompt,
@@ -241,7 +241,7 @@ def main(config: DictConfig) -> None:
             num_best=config.algorithm.cma_es.num_best,
             search_dim=4*64*64,
             fitness_function=partial_fitness_fn,
-            mean_init=jax.random.normal(subkey, shape=(4*64*64,), dtype=jnp.float32),
+            mean_init=jax.random.normal(subkey, shape=(4*64*64,), dtype=jnp.float16),
             init_sigma=config.algorithm.cma_es.sigma,
             delay_eigen_decomposition=config.algorithm.cma_es.delay_eigen_decomposition,
         )
@@ -335,7 +335,7 @@ def main(config: DictConfig) -> None:
         
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
-        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
+        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float16)
         init_images = generate_image_from_genotype_fn(init_genotypes)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
