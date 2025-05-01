@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import hydra
+import logging
 from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
@@ -49,14 +50,18 @@ from tqdm import tqdm
 
 @hydra.main(config_path="config/", config_name="config.yaml", version_base="1.2")
 def main(config: DictConfig) -> None:
-    
+
+    logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger().handlers[0].setLevel(logging.INFO)
+    logger = logging.getLogger(f"{__name__}")
+
     # Debug logging for directories
-    print(f"Current working directory: {os.getcwd()}")
-    print(f"Original working directory: {hydra.utils.get_original_cwd()}")
+    logger.warning(f"Current working directory: {os.getcwd()}")
+    logger.warning(f"Original working directory: {hydra.utils.get_original_cwd()}")
     
     # Get Hydra's output directory
     output_dir = hydra.core.hydra_config.HydraConfig.get().run.dir
-    print(f"Hydra output directory: {output_dir}")
+    logger.warning(f"Hydra output directory: {output_dir}")
     
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -82,6 +87,7 @@ def main(config: DictConfig) -> None:
     os.makedirs(_images_dir + f"final/", exist_ok=True)
 
     # Load Diffusion Model Pipelines
+    logger.warning("--- Loading Models ---")
     vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae", torch_dtype=torch.float16).cuda()
     tokenizer = CLIPTokenizer.from_pretrained(config.model.name, subfolder="tokenizer", torch_dtype=torch.float16)
     text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float16).cuda()
@@ -200,6 +206,8 @@ def main(config: DictConfig) -> None:
 
     # Compute the MAP-Elites centroids
     key, subkey = jax.random.split(key)
+    logger.warning("--- Loading Centroids ---")
+
     centroids = compute_cvt_centroids(
         num_descriptors=2,
         num_init_cvt_samples=config.algorithm.map_elites.num_init_cvt_samples,
@@ -212,6 +220,9 @@ def main(config: DictConfig) -> None:
     map_elites_metrics_fn = partial(default_qd_metrics, qd_offset=0.0)
         
     if config.algorithm.name == "cma_es":
+
+        logger.warning("--- Algorithm initialisation ---")
+
         
         def cma_es_scoring_fn(
             genotypes, 
@@ -258,7 +269,7 @@ def main(config: DictConfig) -> None:
             filename=_metrics_dir + f"cmaes-logs.csv",
             header=list(metrics.keys())
         )
-        
+
         # Run optimization
         for i in tqdm(range(config.algorithm.cma_es.max_iterations)):
             start_time = time.time()
@@ -288,7 +299,13 @@ def main(config: DictConfig) -> None:
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
             # Log
+            wandb.log(current_metrics)
             csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
+            logger.warning(f"--- ITERATION: {i} ---")
+            logger.warning(f"MOQD Score: {current_metrics['moqd_score']:.2f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
+            logger.warning("Max Fitnesses:" +  str(current_metrics['max_fitnesses']))
+
 
             # check stop condition
             stop_condition = cmaes.stop_condition(state)
@@ -297,7 +314,7 @@ def main(config: DictConfig) -> None:
                 break
 
 
-        print("Num iterations before stop condition: ", i)
+        logger.warning("Num iterations before stop condition: ", i)
                
         # Plot results
         fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
@@ -332,7 +349,8 @@ def main(config: DictConfig) -> None:
                 
    
     elif config.algorithm.name == "map_elites":
-        
+
+        logger.warning("--- Algorithm initialisation ---")
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
         init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float16)
@@ -411,8 +429,13 @@ def main(config: DictConfig) -> None:
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
             # Log
+            wandb.log(current_metrics)
             csv_logger.log(jax.tree.map(lambda x: x[-1], metrics))
-        
+            logger.warning(f"--- ITERATION: {i} ---")
+            logger.warning(f"MOQD Score: {current_metrics['moqd_score']:.2f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
+            logger.warning("Max Fitnesses:" +  str(current_metrics['max_fitnesses']))
+                   
         # Plot results
         fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
             metrics=metrics,
