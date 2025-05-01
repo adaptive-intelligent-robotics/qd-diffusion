@@ -36,11 +36,11 @@ algorithm:
     num_best: 2
     sigma: 0.2
     delay_eigen_decomposition: True
-    max_iterations: 2
+    max_iterations: 200
   map_elites:
     num_init_cvt_samples: 50000
     num_centroids: 1024
-    max_iterations: 2
+    max_iterations: 200
     min_descriptor: 0.0
     max_descriptor: 10.0
 
