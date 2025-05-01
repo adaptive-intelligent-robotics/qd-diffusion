@@ -86,7 +86,7 @@ def fitness_function(generated_images,
     # Convert fitnesses to jax arrays
     fitnesses_torch = outputs.logits_per_image  # PyTorch tensor
     fitnesses_np = fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
-    fitnesses = jnp.array(fitnesses_np, dtype=jnp.float32)  # Convert to JAX dtype
+    fitnesses = jnp.array(fitnesses_np, dtype=jnp.float16)  # Convert to JAX dtype
     
     return fitnesses
 
@@ -103,7 +103,7 @@ def generate_image_from_genotype(image_array,
     ):
     """Displays an image from a NumPy array."""
     # Convert jax genotypes to pytorch
-    latents = torch.tensor(np.array(image_array), dtype=torch.float32).cuda()    
+    latents = torch.tensor(np.array(image_array), dtype=torch.float16).cuda()    
     
     # Generate images
     generated_images = generate_images_from_latents(latents, prompt, num_inference_steps, guidance_scale, scheduler, unet, vae, tokenizer, text_encoder)
