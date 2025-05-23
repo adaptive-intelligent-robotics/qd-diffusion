@@ -48,6 +48,7 @@ From: ubuntu:22.04
 	# Install requirements
 	pip install -r requirements.txt
 	pip install --upgrade diffusers[flax]
+	pip install --upgrade torch torchvision
 
 %runscript
 	# Run main
