@@ -12,8 +12,8 @@ hydra-joblib-launcher
 ipython
 ipykernel
 imageio
-jax[cuda12]
-jaxlib
+jax[cuda12_pip]==0.4.28
+jaxlib==0.5.3
 jumanji
 matplotlib
 mediapy
@@ -33,7 +33,7 @@ tensorboardx
 tensorflow-probability
 timm
 torchvision
-transformers
+transformers==4.43.
 tqdm
 typing-extensions
 wandb
