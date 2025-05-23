@@ -1,5 +1,3 @@
---find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-
 absl-py
 accelerate
 brax
@@ -12,8 +10,6 @@ hydra-joblib-launcher
 ipython
 ipykernel
 imageio
-jax[cuda12.5_pip]
-jaxlib
 jumanji
 matplotlib
 mediapy
