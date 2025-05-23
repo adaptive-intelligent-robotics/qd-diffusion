@@ -49,8 +49,8 @@ From: ubuntu:22.04
 	pip install -r requirements.txt
 	pip install --upgrade diffusers[flax]
 
-	pip install --upgrade jax jaxlib==0.4.23+cuda123 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-	
+	pip install --upgrade jax jaxlib -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
 %runscript
 	# Run main
 	python /workspace/src/main.py "$@"
