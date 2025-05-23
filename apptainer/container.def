@@ -49,6 +49,7 @@ From: ubuntu:22.04
 	pip install -r requirements.txt
 	pip install --upgrade diffusers[flax]
 	pip install --upgrade torch torchvision
+	pip install -U jax[cuda12_cudnn89] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 %runscript
 	# Run main
