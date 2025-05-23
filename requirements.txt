@@ -12,7 +12,7 @@ hydra-joblib-launcher
 ipython
 ipykernel
 imageio
-jax[cuda12.5_pip]==0.4.28
+jax[cuda12.5_pip]
 jaxlib
 jumanji
 matplotlib
