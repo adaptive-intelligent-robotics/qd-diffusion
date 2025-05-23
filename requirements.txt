@@ -33,7 +33,7 @@ tensorboardx
 tensorflow-probability
 timm
 torchvision
-transformers==4.43.
+transformers
 tqdm
 typing-extensions
 wandb
