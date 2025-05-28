@@ -28,6 +28,9 @@ From: ubuntu:22.04
 	apt update
 	apt install -y wget git software-properties-common tmux
 
+	# Install C compiler
+	apt install -y python3-dev build-essential nvidia-cuda-toolkit
+
 	# Install Python
 	add-apt-repository ppa:deadsnakes/ppa
 	apt install -y python3.10 python3.10-venv
