@@ -36,5 +36,6 @@ torchvision
 transformers
 tqdm
 typing-extensions
+xformers
 wandb
 
