@@ -27,12 +27,10 @@ from feature_functions import (
     get_artclip_score_model,
 )
 
-from model_utils import (get_text_embeddings, 
+from model_utils import ( 
     generate_images_from_latents,
-    generate_images_from_latents_with_grad,
     generate_image_from_genotype,
     fitness_function,
-    fitness_function_with_grad,
     save_images,
     save_final_images
 )
@@ -350,7 +348,7 @@ def main(config: DictConfig) -> None:
     elif config.algorithm.name == "adam":
         logger.warning("--- Algorithm initialisation ---")
         
-        generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents_with_grad,
+        generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents,
             prompt=config.generation.prompt,
             num_inference_steps=config.generation.num_inference_steps,
             guidance_scale=config.generation.guidance_scale,
@@ -358,7 +356,8 @@ def main(config: DictConfig) -> None:
             unet=unet,
             vae=vae,
             tokenizer=tokenizer,
-            text_encoder=text_encoder
+            text_encoder=text_encoder,
+            with_grad=True  # Enable gradients for image generation
         )
                     
         def adam_loss_fn(
@@ -369,10 +368,11 @@ def main(config: DictConfig) -> None:
             
             # Generate images
             generated_images = generate_images_from_latents_fun(genotypes)
-            fitnesses = fitness_function_with_grad(generated_images=generated_images,
+            fitnesses = fitness_function(generated_images=generated_images,
                 prompt=prompt,
                 clip_model=clip_model,
                 clip_tokenizer=tokenizer,
+                with_grad=True  # Enable gradients for fitness calculation
             )
             
             return -fitnesses.squeeze().mean()
