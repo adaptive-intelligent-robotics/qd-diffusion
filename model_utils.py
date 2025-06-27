@@ -1,11 +1,10 @@
-from transformers import CLIPProcessor, CLIPModel, CLIPTextModel, CLIPTokenizer
 import torch
 from PIL import Image
 import jax.numpy as jnp
 import numpy as np
 import os
 import random
-
+import torch.nn.functional as F
 
 # Function to encode text prompt into embeddings
 def get_text_embeddings(prompt,
@@ -65,31 +64,120 @@ def generate_images_from_latents(latents,
         images = vae.decode(latents / 0.18215).sample  # Scale down before decoding
 
     # Convert tensor to PIL images
+    images = (images / 2 + 0.5).clamp(0, 1) # Normalize to [0,1]
+   
+    return images
+
+
+def get_text_embeddings_with_grad(prompt,
+        batch_size,
+        tokenizer,
+        text_encoder,
+    ):
+    text_input = tokenizer([str(prompt)] * batch_size, padding="max_length", max_length=77, return_tensors="pt")
+    text_embeddings = text_encoder(text_input.input_ids.cuda())[0]
+    
+    # Generate unconditional embeddings for classifier-free guidance
+    uncond_input = tokenizer([""] * batch_size, padding="max_length", max_length=77, return_tensors="pt")
+    uncond_embeddings = text_encoder(uncond_input.input_ids.cuda())[0]
+    
+    # Concatenate conditional & unconditional embeddings
+    text_embeddings = torch.cat([uncond_embeddings, text_embeddings]) 
+    return text_embeddings
+
+def generate_images_from_latents_with_grad(latents,
+        prompt,
+        num_inference_steps,
+        guidance_scale,
+        scheduler,
+        unet,
+        vae,
+        tokenizer,
+        text_encoder
+    ):
+
+    batch_size = latents.shape[0]  # Number of images in batch
+    text_embeddings = get_text_embeddings_with_grad(prompt, batch_size, tokenizer, text_encoder)
+
+    scheduler.set_timesteps(num_inference_steps)
+    latents = latents * scheduler.init_noise_sigma  # Scale initial noise
+
+    for t in scheduler.timesteps:
+        # Expand latents for classifier-free guidance (double batch size)
+        latent_model_input = latents.repeat(2, 1, 1, 1)
+        latent_model_input = scheduler.scale_model_input(latent_model_input, timestep=t)
+
+        # Predict noise
+        noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+
+        # Apply classifier-free guidance
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        # Denoising step
+        latents = scheduler.step(noise_pred, t, latents).prev_sample
+
+    # Decode latents into images
+    images = vae.decode(latents / 0.18215).sample  # Scale down before decoding
     images = (images / 2 + 0.5).clamp(0, 1)  # Normalize to [0,1]
-    images = (images * 255).cpu().numpy().astype(np.uint8)  # Convert to uint8
-    pil_images = [Image.fromarray(img.transpose(1, 2, 0)) for img in images]  # CHW → HWC
-
-    return pil_images
-
+    return images
 
 
 def fitness_function(generated_images,
         prompt,
         clip_model,
-        clip_processor,
+        clip_tokenizer,
 ):
-    # Generate CLIP Scores
-    inputs = clip_processor(text=prompt, 
-                    images=generated_images, return_tensors="pt", padding=True)
-    outputs = clip_model(**inputs)
+    # Normalize images to match CLIP's expected range
+    # CLIP expects images in [0, 1] → then normalized to mean/std
+    normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
+    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
+
+    # Tokenize prompt (no gradients needed)
+    text_inputs = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
+
+    # Forward through CLIP (no processor)
+    with torch.no_grad():
+        image_features = clip_model.get_image_features(normalized_images)
+        text_features = clip_model.get_text_features(**text_inputs)
+
+    # Cosine similarity
+    image_features = F.normalize(image_features, dim=-1)
+    text_features = F.normalize(text_features, dim=-1)
+    # logit_scale = clip_model.logit_scale.exp()
+    fitnesses_torch = (image_features @ text_features.T).squeeze() #* logit_scale
     
-    # Convert fitnesses to jax arrays
-    fitnesses_torch = outputs.logits_per_image  # PyTorch tensor
     fitnesses_np = fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
-    fitnesses = jnp.array(fitnesses_np, dtype=jnp.float16)  # Convert to JAX dtype
+    fitnesses = jnp.array(fitnesses_np, dtype=jnp.float32)  # Convert to JAX dtype
     
     return fitnesses
 
+
+def fitness_function_with_grad(
+    generated_images,
+    prompt,
+    clip_model,
+    clip_tokenizer,
+):
+    # Normalize images to match CLIP's expected range
+    # CLIP expects images in [0, 1] → then normalized to mean/std
+    normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
+    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
+
+    # Tokenize prompt (no gradients needed)
+    text_inputs = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
+
+    # Forward through CLIP (no processor)
+    image_features = clip_model.get_image_features(normalized_images)
+    text_features = clip_model.get_text_features(**text_inputs)
+
+    # Cosine similarity
+    image_features = F.normalize(image_features, dim=-1)
+    text_features = F.normalize(text_features, dim=-1)
+    # logit_scale = clip_model.logit_scale.exp()
+    fitnesses = (image_features @ text_features.T).squeeze() #* logit_scale
+
+    return fitnesses
 
 def generate_image_from_genotype(image_array,
         prompt,
@@ -103,7 +191,7 @@ def generate_image_from_genotype(image_array,
     ):
     """Displays an image from a NumPy array."""
     # Convert jax genotypes to pytorch
-    latents = torch.tensor(np.array(image_array), dtype=torch.float16).cuda()    
+    latents = torch.tensor(np.array(image_array), dtype=torch.float32).cuda()    
     
     # Generate images
     generated_images = generate_images_from_latents(latents, prompt, num_inference_steps, guidance_scale, scheduler, unet, vae, tokenizer, text_encoder)
@@ -122,7 +210,7 @@ def save_images(images, iteration="", filenames=None, folder="results"):
       
     for i, image_array in enumerate(images):
         # Convert to NumPy if needed
-        image_array = np.array(image_array)
+        image_array = np.array(image_array.cpu())
 
         # Normalize to [0,255] if needed
         image_array = (image_array - image_array.min()) / (image_array.max() - image_array.min() + 1e-8)

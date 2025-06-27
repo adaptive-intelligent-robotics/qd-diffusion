@@ -1,10 +1,14 @@
 import os
-from pathlib import Path
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.1"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+import gc
 import hydra
 import logging
 from omegaconf import DictConfig, OmegaConf
 import torch
 import wandb
+torch.cuda.empty_cache()
 
 from APDDv2.demo import load_model, get_score
 import APDDv2.models.clip as clip
@@ -16,7 +20,7 @@ from diffusers import (
     AutoencoderKL,
     LMSDiscreteScheduler
 )
-from transformers import CLIPProcessor, CLIPModel, CLIPTextModel, CLIPTokenizer
+from transformers import CLIPModel, CLIPTextModel, CLIPTokenizerFast
 from feature_functions import (
     brightness,
     average_hue,
@@ -25,8 +29,10 @@ from feature_functions import (
 
 from model_utils import (get_text_embeddings, 
     generate_images_from_latents,
+    generate_images_from_latents_with_grad,
     generate_image_from_genotype,
     fitness_function,
+    fitness_function_with_grad,
     save_images,
     save_final_images
 )
@@ -88,23 +94,17 @@ def main(config: DictConfig) -> None:
 
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
-    vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae", torch_dtype=torch.float16).cuda()
-    tokenizer = CLIPTokenizer.from_pretrained(config.model.name, subfolder="tokenizer", torch_dtype=torch.float16)
-    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float16).cuda()
-    unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet", torch_dtype=torch.float16).cuda()
-    scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler", torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae", torch_dtype=torch.float32).cuda()
+    tokenizer = CLIPTokenizerFast.from_pretrained(config.model.name, subfolder="tokenizer", torch_dtype=torch.float32)
+    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float32).cuda()
+    unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet", torch_dtype=torch.float32).cuda()
+    unet.enable_gradient_checkpointing()
+    scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler", torch_dtype=torch.float32)
     
     # Initialize random key
     key = jax.random.PRNGKey(config.algorithm.seed)
     
     # Initialise scoring function
-    prompt_embeddings = get_text_embeddings(
-        prompt=config.generation.prompt,
-        batch_size=config.algorithm.batch_size,
-        tokenizer=tokenizer,
-        text_encoder=text_encoder,
-    )
-    
     generate_images_from_latents_fn = partial(generate_images_from_latents,
         prompt=config.generation.prompt,
         num_inference_steps=config.generation.num_inference_steps,
@@ -127,8 +127,7 @@ def main(config: DictConfig) -> None:
         text_encoder=text_encoder
     )
     
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-    clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda")
     
     descriptor_functions = []
     
@@ -167,24 +166,25 @@ def main(config: DictConfig) -> None:
         key,
         prompt,
         clip_model,
-        clip_processor,
+        clip_tokenizer,
         generate_images_from_latents_fun,
         descriptor_functions: List[Callable]
     ):
         
         # Convert jax genotypes to pytorch
-        latents = torch.tensor(np.array(genotypes), dtype=torch.float16).cuda()    
+        latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
     
         # Generate images
         generated_images = generate_images_from_latents_fun(latents)
-        generated_images_np = np.array([np.array(img) for img in generated_images])  
-        generated_images_jnp = jnp.array(generated_images_np, dtype=jnp.float16)  # Ensure JAX dtype
-        
+              
         fitnesses = fitness_function(generated_images=generated_images,
             prompt=prompt,
             clip_model=clip_model,
-            clip_processor=clip_processor,
+            clip_tokenizer=clip_tokenizer,
         )
+        
+        # Convert generated images to numpy
+        generated_images_np = np.array(generated_images.cpu())
                 
         descriptors = []
         
@@ -199,14 +199,14 @@ def main(config: DictConfig) -> None:
     scoring_function = partial(scoring_fn,
         prompt=config.generation.prompt,
         clip_model=clip_model,
-        clip_processor=clip_processor,
+        clip_tokenizer=tokenizer,
         generate_images_from_latents_fun=generate_images_from_latents_fn,
         descriptor_functions=descriptor_functions,
     )
 
     # Compute the MAP-Elites centroids
     key, subkey = jax.random.split(key)
-    logger.warning("--- Loading Centroids ---")
+    logger.warning("--- Generating Centroids ---")
 
     centroids = compute_cvt_centroids(
         num_descriptors=2,
@@ -252,7 +252,7 @@ def main(config: DictConfig) -> None:
             num_best=config.algorithm.cma_es.num_best,
             search_dim=4*64*64,
             fitness_function=partial_fitness_fn,
-            mean_init=jax.random.normal(subkey, shape=(4*64*64,), dtype=jnp.float16),
+            mean_init=jax.random.normal(subkey, shape=(4*64*64,), dtype=jnp.float32),
             init_sigma=config.algorithm.cma_es.sigma,
             delay_eigen_decomposition=config.algorithm.cma_es.delay_eigen_decomposition,
         )
@@ -346,14 +346,163 @@ def main(config: DictConfig) -> None:
             n_sample=5,
             folder=_images_dir + f"final/"
         )
-                
-   
+    
+    elif config.algorithm.name == "adam":
+        logger.warning("--- Algorithm initialisation ---")
+        
+        generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents_with_grad,
+            prompt=config.generation.prompt,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
+            tokenizer=tokenizer,
+            text_encoder=text_encoder
+        )
+                    
+        def adam_loss_fn(
+            genotypes,
+            generate_images_from_latents_fun,
+            prompt,
+        ):
+            
+            # Generate images
+            generated_images = generate_images_from_latents_fun(genotypes)
+            fitnesses = fitness_function_with_grad(generated_images=generated_images,
+                prompt=prompt,
+                clip_model=clip_model,
+                clip_tokenizer=tokenizer,
+            )
+            
+            return -fitnesses.squeeze().mean()
+        
+        loss_fn = partial(adam_loss_fn,
+            generate_images_from_latents_fun=generate_images_from_latents_with_grad_fn,
+            prompt=config.generation.prompt,
+        )
+        
+        # Create empty repertoire with default values
+        passive_repertoire = MapElitesRepertoire.init_default(
+            genotype=jnp.zeros((4, 64, 64)), 
+            centroids=centroids
+        )
+        
+        # Initialise genotype as torch tensor
+        key, subkey = jax.random.split(key)  # JAX PRNG handling
+
+        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.adam.batch_size, 4, 64, 64), dtype=jnp.float32)
+        init_genotypes_np = np.array(init_genotypes)  # ← assuming JAX to NumPy here
+        init_genotypes_torch = torch.nn.Parameter(
+            torch.tensor(init_genotypes_np, dtype=torch.float32, device='cuda', requires_grad=True)
+        )
+
+        # Save initial images
+        init_images = generate_image_from_genotype_fn(init_genotypes)
+        save_images(init_images, iteration="init", folder=_images_dir + f"init/")
+        
+        # Evaluate initial population and add to passive repertoire
+        key, subkey = jax.random.split(key)
+        fitnesses, descriptors, _ = scoring_function(init_genotypes, subkey)
+        passive_repertoire = passive_repertoire.add(
+            jnp.reshape(init_genotypes, (config.algorithm.adam.batch_size, 4, 64, 64)),
+            descriptors,
+            fitnesses
+        )                    
+        del init_genotypes, init_genotypes_np, init_images, fitnesses, descriptors, centroids
+            
+        # Initialize Adam optimizer
+        adam_optimiser = torch.optim.Adam([init_genotypes_torch], lr=config.algorithm.adam.learning_rate)
+
+        # Initialize metrics
+        metrics = dict.fromkeys(["iteration", "loss", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
+
+        csv_logger = CSVLogger(
+            filename=_metrics_dir + f"adam-logs.csv",
+            header=list(metrics.keys())
+        )
+        
+        # Run optimization
+        for i in range(config.algorithm.adam.max_iterations):
+            start_time = time.time()
+            
+            # Apply Adam
+            adam_optimiser.zero_grad()
+            loss = loss_fn(init_genotypes_torch)  
+            loss.backward()
+            adam_optimiser.step()
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            timelapse = time.time() - start_time
+
+            # Convert torch to jnp
+            genotypes_jnp = jnp.array(init_genotypes_torch.detach().cpu().numpy(), dtype=jnp.float32)
+            fitnesses, descriptors, _ = scoring_function(genotypes_jnp, key)
+            passive_repertoire = passive_repertoire.add(
+                jnp.reshape(genotypes_jnp, (config.algorithm.adam.batch_size, 4, 64, 64)),
+                descriptors,
+                fitnesses
+            )
+            del genotypes_jnp, fitnesses, descriptors
+            
+            current_metrics = map_elites_metrics_fn(passive_repertoire)
+                        
+            # Metrics
+            current_metrics["iteration"] = i
+            current_metrics["time"] = timelapse
+            current_metrics["loss"] = loss.item()
+            
+            # Log
+            # wandb.log(current_metrics)
+            csv_logger.log(current_metrics)
+            logger.warning(f"--- ITERATION: {i} ---")
+            logger.warning(f"Loss: {-loss.item():.2f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
+            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+            
+            # Concatenate
+            current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
+            metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
+
+        # Plot results
+        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.adam.max_iterations),
+            metrics=metrics,
+            repertoire=passive_repertoire,
+            min_descriptor=config.algorithm.map_elites.min_descriptor,
+            max_descriptor=config.algorithm.map_elites.max_descriptor
+        )
+        fig.savefig(_images_dir + f"passive_repertoire-results.png")
+        
+        # Save final repertoire
+        np.savez(_repertoire_dir + f"final_passive_repertoire.npz", 
+            genotypes=passive_repertoire.genotypes,
+            descriptors=passive_repertoire.descriptors,
+            fitnesses=passive_repertoire.fitnesses,
+            centroids=passive_repertoire.centroids
+        )
+        
+        # Save final images
+        save_final_images(passive_repertoire,
+            config.generation.prompt,
+            config.generation.num_inference_steps,
+            config.generation.guidance_scale,
+            scheduler,
+            unet,
+            vae,
+            tokenizer,
+            text_encoder,
+            n_sample=5,
+            folder=_images_dir + f"final/"
+        )
+        
     elif config.algorithm.name == "map_elites":
 
         logger.warning("--- Algorithm initialisation ---")
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
-        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float16)
+        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
         init_images = generate_image_from_genotype_fn(init_genotypes)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
