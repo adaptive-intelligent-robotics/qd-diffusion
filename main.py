@@ -267,12 +267,24 @@ def main(config: DictConfig) -> None:
         init_images = generate_image_from_genotype_fn(init_samples_images)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
-        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
+        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
         csv_logger = CSVLogger(
             filename=_metrics_dir + f"cmaes-logs.csv",
             header=list(metrics.keys())
         )
 
+        # Log initial metrics
+        current_metrics = map_elites_metrics_fn(passive_repertoire)
+        current_metrics["iteration"] = 0
+        current_metrics["time"] = 0.0
+        current_metrics["evaluations"] = 0.0
+        wandb.log(current_metrics)
+        csv_logger.log(current_metrics)
+        logger.warning(f"--- ITERATION: {0} ---")
+        logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+        logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+        logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+            
         # Run optimization
         for i in tqdm(range(config.algorithm.cma_es.max_iterations)):
             start_time = time.time()
@@ -296,15 +308,17 @@ def main(config: DictConfig) -> None:
             timelapse = time.time() - start_time
 
             # Metrics
-            current_metrics["iteration"] = i
+            current_metrics["iteration"] = i+1
             current_metrics["time"] = timelapse
+            current_metrics["evaluations"] = (i+1) * config.algorithm.cma_es.population_size
             
             # Log
             wandb.log(current_metrics)
             csv_logger.log(current_metrics)
-            logger.warning(f"--- ITERATION: {i} ---")
-            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
-            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
+            logger.warning(f"--- ITERATION: {i+1} ---")
+            logger.warning(f"CMA-ES Population best fitness: {jnp.max(fitnesses):.3f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
             logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
             
             # Concatenate
@@ -421,12 +435,24 @@ def main(config: DictConfig) -> None:
         adam_optimiser = torch.optim.Adam([init_genotypes_torch], lr=config.algorithm.adam.learning_rate)
 
         # Initialize metrics
-        metrics = dict.fromkeys(["iteration", "loss", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
+        metrics = dict.fromkeys(["iteration", "loss", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
 
         csv_logger = CSVLogger(
             filename=_metrics_dir + f"adam-logs.csv",
             header=list(metrics.keys())
         )
+        
+        # Log initial metrics
+        current_metrics = map_elites_metrics_fn(passive_repertoire)
+        current_metrics["iteration"] = 0
+        current_metrics["time"] = 0.0
+        current_metrics["evaluations"] = 0.0
+        wandb.log(current_metrics)
+        csv_logger.log(current_metrics)
+        logger.warning(f"--- ITERATION: {0} ---")
+        logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+        logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+        logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
         
         # Run optimization
         for i in range(config.algorithm.adam.max_iterations):
@@ -455,19 +481,20 @@ def main(config: DictConfig) -> None:
             current_metrics = map_elites_metrics_fn(passive_repertoire)
                         
             # Metrics
-            current_metrics["iteration"] = i
+            current_metrics["iteration"] = i+1
             current_metrics["time"] = timelapse
             current_metrics["loss"] = loss.item()
+            current_metrics["evaluations"] = (i+1) * config.algorithm.adam.batch_size
             
             # Log
-            # wandb.log(current_metrics)
+            wandb.log(current_metrics)
             csv_logger.log(current_metrics)
-            logger.warning(f"--- ITERATION: {i} ---")
-            logger.warning(f"Loss: {-loss.item():.2f}")
-            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
-            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
-            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
-            
+            logger.warning(f"--- ITERATION: {i+1} ---")
+            logger.warning(f"Loss: {loss.item():.4f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+            logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")       
+                 
             # Concatenate
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
@@ -508,7 +535,7 @@ def main(config: DictConfig) -> None:
         logger.warning("--- Algorithm initialisation ---")
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
-        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.batch_size, 4, 64, 64), dtype=jnp.float32)
+        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.map_elites.batch_size, 4, 64, 64), dtype=jnp.float32)
         init_images = generate_image_from_genotype_fn(init_genotypes)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
@@ -521,7 +548,7 @@ def main(config: DictConfig) -> None:
             mutation_fn=None,
             variation_fn=variation_fn,
             variation_percentage=1.0,
-            batch_size=config.algorithm.batch_size
+            batch_size=config.algorithm.map_elites.batch_size
         )
        # Instantiate MAP-Elites
         map_elites = MAPElites(
@@ -546,12 +573,24 @@ def main(config: DictConfig) -> None:
         )
         
         
-        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time"], jnp.array([]))
+        metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
         csv_logger = CSVLogger(
             filename=_metrics_dir + f"mapelites-logs.csv",
             header=list(metrics.keys())
         )
-
+        
+        # Log initial metrics
+        current_metrics = map_elites_metrics_fn(repertoire)
+        current_metrics["iteration"] = 0.0
+        current_metrics["time"] = 0.0
+        current_metrics["evaluations"] = config.algorithm.map_elites.batch_size
+        wandb.log(current_metrics)
+        csv_logger.log(current_metrics)
+        logger.warning(f"--- ITERATION: {0} ---")
+        logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+        logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+        logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")      
+          
         # Main loop
         for i in tqdm(range(config.algorithm.map_elites.max_iterations)):
             start_time = time.time()
@@ -578,17 +617,18 @@ def main(config: DictConfig) -> None:
             timelapse = time.time() - start_time
 
             # Metrics
-            current_metrics["iteration"] = i
+            current_metrics["iteration"] = i+1
             current_metrics["time"] = timelapse
+            current_metrics["evaluations"] = (i+2) * config.algorithm.map_elites.batch_size
 
             # Log
             wandb.log(current_metrics)
             csv_logger.log(current_metrics)
             logger.warning(f"--- ITERATION: {i} ---")
-            logger.warning(f"QD Score: {current_metrics['qd_score']:.2f}")
-            logger.warning(f"Coverage: {current_metrics['coverage']:.2f}%")
-            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
-            
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+            logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")  
+                      
             # Concatenate
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
