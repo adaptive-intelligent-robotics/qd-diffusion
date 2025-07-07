@@ -338,8 +338,7 @@ class CMAES:
             an updated algorithm state
         """
         fitnesses, descriptors = self._fitness_function(samples, key)
-        fitnesses = -fitnesses  # Only negate the fitness values
-        idx_sorted = jnp.argsort(fitnesses)
+        idx_sorted = jnp.argsort(-fitnesses)
         sorted_candidates = samples[idx_sorted[: self._num_best]]
 
         new_state = self.update_state(cmaes_state, sorted_candidates)

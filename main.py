@@ -1,6 +1,5 @@
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.1"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 import gc
 import hydra
@@ -55,6 +54,12 @@ from tqdm import tqdm
 @hydra.main(config_path="config/", config_name="config.yaml", version_base="1.2")
 def main(config: DictConfig) -> None:
 
+    # Dynamically set environment variable based on the algorithm
+    if config.algorithm.name == "adam":
+        os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.1"
+    else:
+        os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
+        
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger().handlers[0].setLevel(logging.INFO)
     logger = logging.getLogger(f"{__name__}")
@@ -271,14 +276,15 @@ def main(config: DictConfig) -> None:
         # Run optimization
         for i in tqdm(range(config.algorithm.cma_es.max_iterations)):
             start_time = time.time()
-
+                      
             # Sample, sample_size = population_size
-            samples, key = cmaes.sample(state, key)
-
+            key, subkey = jax.random.split(key)
+            samples = cmaes.sample(state, subkey)
+                                    
             # udpate
             key, subkey = jax.random.split(key)
             state, fitnesses, descriptors = cmaes.update(state, samples, subkey)
-            
+                        
             # Add initial samples
             passive_repertoire = passive_repertoire.add(
                 jnp.reshape(samples, (config.algorithm.cma_es.population_size, 4, 64, 64)),
