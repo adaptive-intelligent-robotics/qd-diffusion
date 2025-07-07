@@ -81,9 +81,6 @@ def generate_images_from_latents(latents,
         # Disable gradients for decoding    
         with torch.no_grad():
             images = vae.decode(latents / 0.18215).sample  # Scale down before decoding
-
-    # Convert tensor to PIL images
-    images = (images / 2 + 0.5).clamp(0, 1) # Normalize to [0,1]
    
     return images
 
