@@ -283,7 +283,7 @@ def main(config: DictConfig) -> None:
         logger.warning(f"--- ITERATION: {0} ---")
         logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
         logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
-        logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+        logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")       
             
         # Run optimization
         for i in tqdm(range(config.algorithm.cma_es.max_iterations)):
@@ -319,7 +319,7 @@ def main(config: DictConfig) -> None:
             logger.warning(f"CMA-ES Population best fitness: {jnp.max(fitnesses):.3f}")
             logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
             logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
-            logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+            logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")       
             
             # Concatenate
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
@@ -452,7 +452,7 @@ def main(config: DictConfig) -> None:
         logger.warning(f"--- ITERATION: {0} ---")
         logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
         logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
-        logger.warning("Max Fitness:" +  str(current_metrics['max_fitness']))
+        logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")       
         
         # Run optimization
         for i in range(config.algorithm.adam.max_iterations):
