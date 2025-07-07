@@ -24,20 +24,20 @@ generation:
 
 # Algorithm configuration
 algorithm:
-  name: "adam"  # or "map_elites" or "direct" for direct generation without optimization
+  name: "map_elites"  # map_elites, cma_es or adam
   seed: 42
   descriptor_names: ["layout_and_composition", "light_and_shadow"]
   iso_sigma: 0.005
   line_sigma: 0.05
-  batch_size: 4
 
   cma_es:
     population_size: 4
     num_best: 2
-    sigma: 0.2
+    sigma: 0.1
     delay_eigen_decomposition: True
     max_iterations: 200
   map_elites:
+    batch_size: 4
     num_init_cvt_samples: 50000
     num_centroids: 1024
     max_iterations: 200
