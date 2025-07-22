@@ -33,24 +33,29 @@ def get_text_embeddings(prompt,
     
     # Concatenate conditional & unconditional embeddings
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings]) 
-    return text_embeddings
+    return text_embeddings.detach()
 
 
-def generate_images_from_latents(latents,
-        prompt,
-        num_inference_steps,
-        guidance_scale,
-        scheduler,
-        unet,
-        vae,
-        tokenizer,
-        text_encoder,
-        with_grad=False,
-    ):
+def generate_images_from_latents(
+    latents,
+    prompt_embedding,
+    num_inference_steps,
+    guidance_scale,
+    scheduler,
+    unet,
+    vae,
+    with_grad=False,
+):
 
-    batch_size = latents.shape[0]  # Number of images in batch
-    text_embeddings = get_text_embeddings(prompt, batch_size, tokenizer, text_encoder, with_grad)
-
+    # Convert JAX latents to PyTorch tensor
+    if isinstance(latents, np.ndarray):
+        latents = torch.tensor(latents, dtype=torch.float32).cuda()
+    elif isinstance(latents, torch.Tensor):
+        latents = latents.float().cuda()
+    else:
+        latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()
+        
+    # Get text embeddings
     scheduler.set_timesteps(num_inference_steps)
     latents = latents * scheduler.init_noise_sigma  # Scale initial noise
 
@@ -61,11 +66,11 @@ def generate_images_from_latents(latents,
 
         # Predict noise
         if with_grad:
-            noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            noise_pred = unet(latent_model_input, t, encoder_hidden_states=prompt_embedding).sample
         else:
             # Disable gradients for inference
             with torch.no_grad():
-                noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+                noise_pred = unet(latent_model_input, t, encoder_hidden_states=prompt_embedding).sample
 
         # Apply classifier-free guidance
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -127,22 +132,20 @@ def fitness_function(generated_images,
         
         return fitnesses
 
-def generate_image_from_genotype(image_array,
-        prompt,
-        num_inference_steps,
-        guidance_scale,
-        scheduler,
-        unet,
-        vae,
-        tokenizer,
-        text_encoder
-    ):
+def generate_images_from_jax_genotype(latents,
+    prompt_embedding,
+    num_inference_steps,
+    guidance_scale,
+    scheduler,
+    unet,
+    vae,
+):
     """Displays an image from a NumPy array."""
     # Convert jax genotypes to pytorch
-    latents = torch.tensor(np.array(image_array), dtype=torch.float32).cuda()    
+    latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()    
     
     # Generate images
-    generated_images = generate_images_from_latents(latents, prompt, num_inference_steps, guidance_scale, scheduler, unet, vae, tokenizer, text_encoder)
+    generated_images = generate_images_from_latents(latents, prompt_embedding, num_inference_steps, guidance_scale, scheduler, unet, vae)
 
     return generated_images
 
@@ -249,16 +252,22 @@ def save_final_images(repertoire,
         combined_filenames = [best_filename] + sampled_filenames
     
     # Step 3: Generate images from combined genotypes
-    final_images = generate_image_from_genotype(
+    prompt_embedding = get_text_embeddings(
+        prompt=prompt,
+        batch_size=len(combined_genotypes),
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        with_grad=False
+    )
+    
+    final_images = generate_images_from_latents(
         combined_genotypes,
-        prompt,
+        prompt_embedding,
         num_inference_steps,
         guidance_scale,
         scheduler,
         unet,
         vae,
-        tokenizer,
-        text_encoder
     )
     
     # Use the existing save_images function to save the images

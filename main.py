@@ -9,13 +9,8 @@ import torch
 import wandb
 torch.cuda.empty_cache()
 
-from APDDv2.demo import load_model, get_score
-import APDDv2.models.clip as clip
 from diffusers import (
-    DiffusionPipeline, 
-    StableDiffusionPipeline,
     UNet2DConditionModel,
-    PNDMScheduler,
     AutoencoderKL,
     LMSDiscreteScheduler
 )
@@ -26,14 +21,13 @@ from feature_functions import (
     get_artclip_score_model,
 )
 
-from model_utils import ( 
+from model_utils import (
+    get_text_embeddings,
     generate_images_from_latents,
-    generate_image_from_genotype,
     fitness_function,
     save_images,
     save_final_images
 )
-from PIL import Image
 
 import jax
 import jax.numpy as jnp
@@ -109,28 +103,32 @@ def main(config: DictConfig) -> None:
     
     # Initialise scoring function
     generate_images_from_latents_fn = partial(generate_images_from_latents,
-        prompt=config.generation.prompt,
         num_inference_steps=config.generation.num_inference_steps,
         guidance_scale=config.generation.guidance_scale,
         scheduler=scheduler,
         unet=unet,
         vae=vae,
-        tokenizer=tokenizer,
-        text_encoder=text_encoder
     )
     
-    generate_image_from_genotype_fn = partial(generate_image_from_genotype,
+    if config.algorithm.name == "adam":
+        batch_size = config.algorithm.adam.batch_size
+        with_grad = config.algorithm.adam.with_grad
+    elif config.algorithm.name == "cma_es":
+        batch_size = config.algorithm.cma_es.population_size
+        with_grad = config.algorithm.cma_es.with_grad
+    elif config.algorithm.name == "map_elites":
+        batch_size = config.algorithm.map_elites.batch_size
+        with_grad = config.algorithm.map_elites.with_grad
+
+    original_prompt_embedding = get_text_embeddings(
         prompt=config.generation.prompt,
-        num_inference_steps=config.generation.num_inference_steps,
-        guidance_scale=config.generation.guidance_scale,
-        scheduler=scheduler,
-        unet=unet,
-        vae=vae,
+        batch_size=batch_size, # type: ignore
         tokenizer=tokenizer,
-        text_encoder=text_encoder
+        text_encoder=text_encoder,
+        with_grad=with_grad,
     )
     
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda")
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda") # type: ignore
     
     descriptor_functions = []
     
@@ -165,7 +163,8 @@ def main(config: DictConfig) -> None:
             raise ValueError(f"Descriptor function {d} not found")
         
 
-    def scoring_fn(genotypes,
+    def scoring_fn(latents,
+        prompt_embedding,
         key,
         prompt,
         clip_model,
@@ -174,11 +173,11 @@ def main(config: DictConfig) -> None:
         descriptor_functions: List[Callable]
     ):
         
-        # Convert jax genotypes to pytorch
-        latents = torch.tensor(np.array(genotypes), dtype=torch.float32).cuda()    
+        # # Convert jax genotypes to pytorch
+        # latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()    
     
         # Generate images
-        generated_images = generate_images_from_latents_fun(latents)
+        generated_images = generate_images_from_latents_fun(latents, prompt_embedding)
               
         fitnesses = fitness_function(generated_images=generated_images,
             prompt=prompt,
@@ -231,15 +230,17 @@ def main(config: DictConfig) -> None:
             genotypes, 
             key,
             batch_size,
+            prompt_embedding,
         ):
             image_genotypes = jnp.reshape(genotypes, (batch_size, 4, 64, 64))
         
-            fitnesses, descriptors, _ = scoring_function(image_genotypes, key)
+            fitnesses, descriptors, _ = scoring_function(image_genotypes, prompt_embedding, key)
                                     
             return fitnesses.squeeze(), descriptors.squeeze()
         
         partial_fitness_fn = partial(cma_es_scoring_fn,
             batch_size=config.algorithm.cma_es.population_size,
+            prompt_embedding=original_prompt_embedding,
         )
 
         # Create empty repertoire with default values
@@ -263,8 +264,15 @@ def main(config: DictConfig) -> None:
         state = cmaes.init()
         
         # Save initial mean image
-        init_samples_images = jnp.reshape(state.mean, (1, 4, 64, 64))
-        init_images = generate_image_from_genotype_fn(init_samples_images)
+        init_samples_latents = jnp.reshape(state.mean, (1, 4, 64, 64))
+        init_prompt_embedding = get_text_embeddings(
+            prompt=config.generation.prompt,
+            batch_size=1,  # type: ignore
+            tokenizer=tokenizer,
+            text_encoder=text_encoder,
+            with_grad=False,  # No gradients needed for initial image generation
+        )
+        init_images = generate_images_from_latents_fn(init_samples_latents, init_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
@@ -332,10 +340,10 @@ def main(config: DictConfig) -> None:
                 break
 
 
-        logger.warning("Num iterations before stop condition: ", i)
-               
+        logger.warning(f"Num iterations before stop condition: {i}")  
+
         # Plot results
-        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
+        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.cma_es.max_iterations),
             metrics=metrics,
             repertoire=passive_repertoire,
             min_descriptor=config.algorithm.map_elites.min_descriptor,
@@ -369,14 +377,12 @@ def main(config: DictConfig) -> None:
         logger.warning("--- Algorithm initialisation ---")
         
         generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents,
-            prompt=config.generation.prompt,
+            prompt_embedding=original_prompt_embedding,
             num_inference_steps=config.generation.num_inference_steps,
             guidance_scale=config.generation.guidance_scale,
             scheduler=scheduler,
             unet=unet,
             vae=vae,
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
             with_grad=True  # Enable gradients for image generation
         )
                     
@@ -418,12 +424,12 @@ def main(config: DictConfig) -> None:
         )
 
         # Save initial images
-        init_images = generate_image_from_genotype_fn(init_genotypes)
+        init_images = generate_images_from_latents_fn(init_genotypes, original_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         # Evaluate initial population and add to passive repertoire
         key, subkey = jax.random.split(key)
-        fitnesses, descriptors, _ = scoring_function(init_genotypes, subkey)
+        fitnesses, descriptors, _ = scoring_function(init_genotypes, original_prompt_embedding, subkey)
         passive_repertoire = passive_repertoire.add(
             jnp.reshape(init_genotypes, (config.algorithm.adam.batch_size, 4, 64, 64)),
             descriptors,
@@ -457,7 +463,10 @@ def main(config: DictConfig) -> None:
         # Run optimization
         for i in range(config.algorithm.adam.max_iterations):
             start_time = time.time()
-            
+
+            # Detach and re-wrap the tensor to prevent backward reuse error
+            init_genotypes_torch = torch.nn.Parameter(init_genotypes_torch.detach().clone().requires_grad_())
+
             # Apply Adam
             adam_optimiser.zero_grad()
             loss = loss_fn(init_genotypes_torch)  
@@ -470,7 +479,7 @@ def main(config: DictConfig) -> None:
 
             # Convert torch to jnp
             genotypes_jnp = jnp.array(init_genotypes_torch.detach().cpu().numpy(), dtype=jnp.float32)
-            fitnesses, descriptors, _ = scoring_function(genotypes_jnp, key)
+            fitnesses, descriptors, _ = scoring_function(genotypes_jnp, original_prompt_embedding, key)
             passive_repertoire = passive_repertoire.add(
                 jnp.reshape(genotypes_jnp, (config.algorithm.adam.batch_size, 4, 64, 64)),
                 descriptors,
@@ -536,7 +545,7 @@ def main(config: DictConfig) -> None:
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
         init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.map_elites.batch_size, 4, 64, 64), dtype=jnp.float32)
-        init_images = generate_image_from_genotype_fn(init_genotypes)
+        init_images = generate_images_from_latents_fn(init_genotypes, original_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         # Define a metrics function
@@ -559,7 +568,7 @@ def main(config: DictConfig) -> None:
         
         # Evaluate the initial population
         key, subkey = jax.random.split(key)
-        fitnesses, descriptors, extra_scores = scoring_function(init_genotypes, subkey)
+        fitnesses, descriptors, extra_scores = scoring_function(init_genotypes, original_prompt_embedding, subkey)
         
         
         # Compute initial repertoire and emitter state
@@ -601,7 +610,7 @@ def main(config: DictConfig) -> None:
             # Evaluate solutions: get fitness, descriptor and extra scores.
             # This is where custom evaluations on CPU or GPU can be added.
             key, subkey = jax.random.split(key)
-            fitnesses, descriptors, extra_scores = scoring_function(genotypes, subkey)
+            fitnesses, descriptors, extra_scores = scoring_function(genotypes, original_prompt_embedding, subkey)
 
             # Update MAP-Elites
             repertoire, emitter_state, current_metrics = map_elites.tell(
@@ -624,7 +633,7 @@ def main(config: DictConfig) -> None:
             # Log
             wandb.log(current_metrics)
             csv_logger.log(current_metrics)
-            logger.warning(f"--- ITERATION: {i} ---")
+            logger.warning(f"--- ITERATION: {i + 1} ---")
             logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
             logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
             logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")  
