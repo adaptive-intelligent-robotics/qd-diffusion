@@ -27,8 +27,8 @@ algorithm:
   name: "map_elites"  # map_elites, cma_es or adam
   seed: 42
   descriptor_names: ["layout_and_composition", "light_and_shadow"]
-  iso_sigma: 0.005
-  line_sigma: 0.05
+  iso_sigma: 0.05
+  line_sigma: 0.1
 
   cma_es:
     population_size: 4
@@ -36,6 +36,7 @@ algorithm:
     sigma: 0.1
     delay_eigen_decomposition: True
     max_iterations: 200
+    with_grad: False
   map_elites:
     batch_size: 4
     num_init_cvt_samples: 50000
@@ -43,10 +44,12 @@ algorithm:
     max_iterations: 200
     min_descriptor: 0.0
     max_descriptor: 10.0
+    with_grad: False
   adam:
     learning_rate: 0.05
     max_iterations: 1000
     batch_size: 1
+    with_grad: True
 
 # Output configuration
 output:
