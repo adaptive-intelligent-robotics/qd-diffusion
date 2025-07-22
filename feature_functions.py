@@ -55,7 +55,7 @@ def get_artclip_score_model(feature_name):
     elif feature_name == "light_and_shadow":
         model = load_model("APDDv2/model_weights/7.Light and shadow_reg_weight--e7-train0.1937-test0.6518_best.pth", device)
     elif feature_name == "color":
-        model = load_model(".APDDv2/model_weights/8.Color_reg_weight--e5-train0.2905-test0.5871_best.pth", device)
+        model = load_model("APDDv2/model_weights/8.Color_reg_weight--e5-train0.2905-test0.5871_best.pth", device)
     elif feature_name == "details_and_texture":
         model = load_model("APDDv2/model_weights/9.Details and texture_reg_weight--e4-train0.4385-test0.7034_best.pth", device)
     elif feature_name == "overall":
