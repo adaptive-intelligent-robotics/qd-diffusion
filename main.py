@@ -103,7 +103,7 @@ def main(config: DictConfig) -> None:
     logger.warning("--- Loading Models ---")
     vae = AutoencoderKL.from_pretrained(config.model.name, subfolder="vae", torch_dtype=torch.float32).cuda()
     tokenizer = CLIPTokenizerFast.from_pretrained(config.model.name, subfolder="tokenizer", torch_dtype=torch.float32)
-    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float32).cuda()
+    text_encoder = CLIPTextModel.from_pretrained(config.model.name, subfolder="text_encoder", torch_dtype=torch.float32).cuda().eval()
     unet = UNet2DConditionModel.from_pretrained(config.model.name, subfolder="unet", torch_dtype=torch.float32).cuda()
     unet.enable_gradient_checkpointing()
     scheduler = LMSDiscreteScheduler.from_pretrained(config.model.name, subfolder="scheduler", torch_dtype=torch.float32)
@@ -136,6 +136,14 @@ def main(config: DictConfig) -> None:
         tokenizer=tokenizer,
         text_encoder=text_encoder,
         with_grad=with_grad,
+    )
+    
+    single_prompt_embedding = get_text_embeddings(
+        prompt=config.generation.prompt,
+        batch_size=1,  # type: ignore
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        with_grad=False,  # No gradients needed for initial image generation
     )
     
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda") # type: ignore
@@ -292,14 +300,7 @@ def main(config: DictConfig) -> None:
         
         # Save initial mean image
         init_samples_latents = jnp.reshape(state.mean, (1, 4, 64, 64))
-        init_prompt_embedding = get_text_embeddings(
-            prompt=config.generation.prompt,
-            batch_size=1,  # type: ignore
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
-            with_grad=False,  # No gradients needed for initial image generation
-        )
-        init_images = generate_images_from_latents_fn(init_samples_latents, init_prompt_embedding)
+        init_images = generate_images_from_latents_fn(init_samples_latents, single_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
@@ -571,13 +572,12 @@ def main(config: DictConfig) -> None:
         logger.warning("--- Algorithm initialisation ---")
     
         key, subkey = jax.random.split(key)  # JAX PRNG handling
-        init_genotypes = jax.random.normal(subkey, shape=(config.algorithm.map_elites.batch_size, 4, 64, 64), dtype=jnp.float32)
-        init_images = generate_images_from_latents_fn(init_genotypes, original_prompt_embedding)
-        save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         # Define a metrics function
         variation_fn = partial(
-            isoline_variation, iso_sigma=config.algorithm.iso_sigma, line_sigma=config.algorithm.line_sigma
+            isoline_variation,
+            iso_sigma=config.algorithm.variation.iso_sigma,
+            line_sigma=config.algorithm.variation.line_sigma
         )
 
         mixing_emitter = MixingEmitter(
@@ -586,7 +586,12 @@ def main(config: DictConfig) -> None:
             variation_percentage=1.0,
             batch_size=config.algorithm.map_elites.batch_size
         )
-       # Instantiate MAP-Elites
+        
+        init_latents = jax.random.normal(subkey, shape=(config.algorithm.map_elites.batch_size, 4, 64, 64), dtype=jnp.float32)
+        init_images = generate_images_from_latents_fn(init_latents, original_prompt_embedding)
+        save_images(init_images, iteration="init", folder=_images_dir + f"init/")
+
+        # Instantiate MAP-Elites
         map_elites = MAPElites(
             scoring_function=None,
             emitter=mixing_emitter,
@@ -595,19 +600,33 @@ def main(config: DictConfig) -> None:
         
         # Evaluate the initial population
         key, subkey = jax.random.split(key)
-        fitnesses, descriptors, extra_scores = scoring_function(init_genotypes, original_prompt_embedding, subkey)
         
+        fitnesses, descriptors, extra_scores = scoring_function(init_latents, original_prompt_embedding, subkey)
         
         # Compute initial repertoire and emitter state
-        repertoire, emitter_state, metrics = map_elites.init_ask_tell(
-            genotypes=init_genotypes,
-            fitnesses=fitnesses,
-            descriptors=descriptors,
-            centroids=centroids,
-            key=key,
-            extra_scores=extra_scores,
-        )
-        
+        if config.algorithm.variation.genotype == "embedding":
+            
+            embedding_genotypes = original_prompt_embedding.reshape(batch_size, 2, 77, 1024)
+
+            repertoire, emitter_state, metrics = map_elites.init_ask_tell(
+                genotypes=jnp.array(embedding_genotypes.detach().cpu().numpy(), dtype=jnp.float32),
+                fitnesses=fitnesses,
+                descriptors=descriptors,
+                centroids=centroids,
+                key=key,
+                extra_scores=extra_scores,
+            )
+            
+        elif config.algorithm.variation.genotype == "latents":
+            repertoire, emitter_state, metrics = map_elites.init_ask_tell(
+                genotypes=init_genotypes,
+                fitnesses=fitnesses,
+                descriptors=descriptors,
+                centroids=centroids,
+                key=key,
+                extra_scores=extra_scores,
+            )
+            
         
         metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
         csv_logger = CSVLogger(
@@ -637,7 +656,11 @@ def main(config: DictConfig) -> None:
             # Evaluate solutions: get fitness, descriptor and extra scores.
             # This is where custom evaluations on CPU or GPU can be added.
             key, subkey = jax.random.split(key)
-            fitnesses, descriptors, extra_scores = scoring_function(genotypes, original_prompt_embedding, subkey)
+            if config.algorithm.variation.genotype == "embedding":
+                embeddings = genotypes.reshape(2 * batch_size, 77, 1024)
+                fitnesses, descriptors, extra_scores = scoring_function(init_latents, embeddings, subkey)
+            elif config.algorithm.variation.genotype == "latents":
+                fitnesses, descriptors, extra_scores = scoring_function(genotypes, original_prompt_embedding, subkey)
 
             # Update MAP-Elites
             repertoire, emitter_state, current_metrics = map_elites.tell(

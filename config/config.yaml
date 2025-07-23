@@ -28,8 +28,11 @@ algorithm:
   seed: 42
   descriptor_type: "dino"  
   descriptor_names: ["dino"]
-  iso_sigma: 0.05
-  line_sigma: 0.1
+
+  variation:
+    genotype: "embedding" 
+    iso_sigma: 0.05
+    line_sigma: 0.1
 
   cma_es:
     population_size: 4

@@ -48,13 +48,21 @@ def generate_images_from_latents(
 ):
 
     # Convert JAX latents to PyTorch tensor
+    if isinstance(prompt_embedding, np.ndarray):
+        prompt_embedding = torch.tensor(prompt_embedding, dtype=torch.float32).cuda()
+    elif isinstance(prompt_embedding, torch.Tensor):
+        prompt_embedding = prompt_embedding.float().cuda()
+    else:
+        prompt_embedding = torch.tensor(np.array(prompt_embedding), dtype=torch.float32).cuda()
+    
+    # Ensure prompt_embedding is a PyTorch tensor
     if isinstance(latents, np.ndarray):
         latents = torch.tensor(latents, dtype=torch.float32).cuda()
     elif isinstance(latents, torch.Tensor):
         latents = latents.float().cuda()
     else:
         latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()
-        
+            
     # Get text embeddings
     scheduler.set_timesteps(num_inference_steps)
     latents = latents * scheduler.init_noise_sigma  # Scale initial noise
@@ -131,23 +139,6 @@ def fitness_function(generated_images,
         fitnesses = jnp.array(fitnesses_np, dtype=jnp.float32)  # Convert to JAX dtype
         
         return fitnesses
-
-def generate_images_from_jax_genotype(latents,
-    prompt_embedding,
-    num_inference_steps,
-    guidance_scale,
-    scheduler,
-    unet,
-    vae,
-):
-    """Displays an image from a NumPy array."""
-    # Convert jax genotypes to pytorch
-    latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()    
-    
-    # Generate images
-    generated_images = generate_images_from_latents(latents, prompt_embedding, num_inference_steps, guidance_scale, scheduler, unet, vae)
-
-    return generated_images
 
 
 def save_images(images, iteration="", filenames=None, folder="results"):
