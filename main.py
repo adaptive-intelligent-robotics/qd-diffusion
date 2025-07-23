@@ -14,11 +14,18 @@ from diffusers import (
     AutoencoderKL,
     LMSDiscreteScheduler
 )
-from transformers import CLIPModel, CLIPTextModel, CLIPTokenizerFast
+from transformers import (
+    AutoImageProcessor,
+    AutoModel,
+    CLIPModel,
+    CLIPTextModel,
+    CLIPTokenizerFast,
+)
 from feature_functions import (
     brightness,
     average_hue,
     get_artclip_score_model,
+    dino_feature_extractor
 )
 
 from model_utils import (
@@ -53,7 +60,10 @@ def main(config: DictConfig) -> None:
         os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.1"
     else:
         os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
-        
+    
+    # Set device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger().handlers[0].setLevel(logging.INFO)
     logger = logging.getLogger(f"{__name__}")
@@ -132,36 +142,49 @@ def main(config: DictConfig) -> None:
     
     descriptor_functions = []
     
-    for d in config.algorithm.descriptor_names:
-        if d == "brightness":
-            descriptor_functions.append(brightness)
-        elif d == "average_hue":
-            descriptor_functions.append(average_hue)
-        elif d == "artclip_score":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "theme_and_logic":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "creativity":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "layout_and_composition":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "space_and_perspective":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "sense_of_order":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "light_and_shadow":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "color":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "details_and_texture":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "overall":
-            descriptor_functions.append(get_artclip_score_model(d))
-        elif d == "mood":
-            descriptor_functions.append(get_artclip_score_model(d))
-        else:
-            raise ValueError(f"Descriptor function {d} not found")
-        
+    if config.algorithm.descriptor_type == "dino":
+        dino_model = AutoModel.from_pretrained("facebook/dinov2-base").eval().to(device)
+        dino_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-base")
+        dino_fun =  partial(
+            dino_feature_extractor,
+            processor=dino_processor,
+            model=dino_model,
+            projection_matrix=torch.randn(2, 768, device=device),
+            device=device
+        )
+        descriptor_functions.append(dino_fun)
+    
+    else:
+        for d in config.algorithm.descriptor_names:
+            if d == "brightness":
+                descriptor_functions.append(brightness)
+            elif d == "average_hue":
+                descriptor_functions.append(average_hue)
+            elif d == "artclip_score":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "theme_and_logic":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "creativity":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "layout_and_composition":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "space_and_perspective":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "sense_of_order":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "light_and_shadow":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "color":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "details_and_texture":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "overall":
+                descriptor_functions.append(get_artclip_score_model(d))
+            elif d == "mood":
+                descriptor_functions.append(get_artclip_score_model(d))
+            else:
+                raise ValueError(f"Descriptor function {d} not found")
+            
 
     def scoring_fn(latents,
         prompt_embedding,
@@ -170,11 +193,11 @@ def main(config: DictConfig) -> None:
         clip_model,
         clip_tokenizer,
         generate_images_from_latents_fun,
-        descriptor_functions: List[Callable]
+        descriptor_functions: List[Callable],
+        descriptor_type: str,
     ):
         
-        # # Convert jax genotypes to pytorch
-        # latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()    
+
     
         # Generate images
         generated_images = generate_images_from_latents_fun(latents, prompt_embedding)
@@ -193,9 +216,12 @@ def main(config: DictConfig) -> None:
         for d_fun in descriptor_functions:
             descriptor = jnp.array([d_fun(image) for image in generated_images_np])           
             descriptors.append(descriptor)
-            
-        descriptors = jnp.stack(descriptors, axis=-1)  # Shape: (, num_descriptors)
         
+        if descriptor_type == "dino":
+            descriptors = jnp.array(descriptors).squeeze()  # Shape: (batch_size, num_descriptors)     
+        else:
+            descriptors = jnp.stack(descriptors, axis=-1)
+                    
         return fitnesses, descriptors, {}
 
     scoring_function = partial(scoring_fn,
@@ -204,6 +230,7 @@ def main(config: DictConfig) -> None:
         clip_tokenizer=tokenizer,
         generate_images_from_latents_fun=generate_images_from_latents_fn,
         descriptor_functions=descriptor_functions,
+        descriptor_type=config.algorithm.descriptor_type,
     )
 
     # Compute the MAP-Elites centroids

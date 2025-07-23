@@ -72,3 +72,28 @@ def get_artclip_score_model(feature_name):
     )
     
     return scoring_function
+
+
+def dino_feature_extractor(image_np, processor, model, projection_matrix, device):
+    # Convert NumPy float32 image in [-1, 1] or [0, 1] to [0, 255] uint8
+    if image_np.dtype != np.uint8:
+        if image_np.min() < 0:
+            # Assume [-1, 1] → scale to [0, 255]
+            image_np = ((image_np + 1.0) / 2.0 * 255).clip(0, 255)
+        else:
+            # Assume [0, 1] → scale to [0, 255]
+            image_np = (image_np * 255).clip(0, 255)
+        image_np = image_np.astype(np.uint8)
+
+    # Convert to PIL
+    image_pil = Image.fromarray(image_np, mode='RGB')
+
+    # Process and get embedding
+    inputs = processor(images=image_pil, return_tensors="pt").to(device)
+    with torch.no_grad():
+        output = model(**inputs)
+    embedding = output.last_hidden_state.mean(dim=1).squeeze(0)  # (768,)
+    
+    # Project to 2D
+    descriptors = projection_matrix @ embedding
+    return descriptors.cpu().numpy()  # Return as NumPy array

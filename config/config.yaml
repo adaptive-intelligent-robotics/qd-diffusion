@@ -26,7 +26,8 @@ generation:
 algorithm:
   name: "map_elites"  # map_elites, cma_es or adam
   seed: 42
-  descriptor_names: ["layout_and_composition", "light_and_shadow"]
+  descriptor_type: "dino"  
+  descriptor_names: ["dino"]
   iso_sigma: 0.05
   line_sigma: 0.1
 
@@ -42,14 +43,16 @@ algorithm:
     num_init_cvt_samples: 50000
     num_centroids: 1024
     max_iterations: 200
-    min_descriptor: 0.0
-    max_descriptor: 10.0
+    min_descriptor: -50.0
+    max_descriptor: 50.0
     with_grad: False
   adam:
     learning_rate: 0.05
     max_iterations: 1000
     batch_size: 1
     with_grad: True
+
+analysis_path: "/workspace/src/output/A dog riding a motorbike/map_elites/2025-07-22_130953_42/"
 
 # Output configuration
 output:
