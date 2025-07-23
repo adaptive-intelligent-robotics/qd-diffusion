@@ -226,10 +226,10 @@ def main(config: DictConfig) -> None:
             descriptors.append(descriptor)
         
         if descriptor_type == "dino":
-            descriptors = jnp.array(descriptors).squeeze()  # Shape: (batch_size, num_descriptors)     
+            descriptors = jnp.atleast_2d(jnp.array(descriptors).squeeze()) # Shape: (batch_size, num_descriptors)     
         else:
             descriptors = jnp.stack(descriptors, axis=-1)
-                    
+           
         return fitnesses, descriptors, {}
 
     scoring_function = partial(scoring_fn,
