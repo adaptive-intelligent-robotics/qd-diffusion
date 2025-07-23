@@ -41,7 +41,7 @@ import jax.numpy as jnp
 import numpy as np
 from functools import partial
 from qdax.baselines.cmaes import CMAES
-from qdax.core.emitters.mutation_operators import isoline_variation
+from qdax.core.emitters.mutation_operators import isoline_variation, slerp_variation
 from qdax.core.emitters.standard_emitters import MixingEmitter
 from qdax.core.containers.mapelites_repertoire import compute_cvt_centroids, MapElitesRepertoire
 from qdax.core.map_elites import MAPElites
@@ -574,11 +574,15 @@ def main(config: DictConfig) -> None:
         key, subkey = jax.random.split(key)  # JAX PRNG handling
         
         # Define a metrics function
-        variation_fn = partial(
-            isoline_variation,
-            iso_sigma=config.algorithm.variation.iso_sigma,
-            line_sigma=config.algorithm.variation.line_sigma
-        )
+        if config.algorithm.variation.variation_type == "isoline":
+            variation_fn = partial(
+                isoline_variation,
+                iso_sigma=config.algorithm.variation.iso_sigma,
+                line_sigma=config.algorithm.variation.line_sigma
+            )
+        
+        else:
+            variation_fn = slerp_variation
 
         mixing_emitter = MixingEmitter(
             mutation_fn=None,

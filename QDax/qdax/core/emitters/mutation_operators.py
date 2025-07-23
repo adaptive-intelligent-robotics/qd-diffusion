@@ -224,3 +224,45 @@ def isoline_variation(
     x = jax.tree.map(lambda y1, y2, key: _variation_fn(y1, y2, key), x1, x2, keys_tree)
 
     return x
+
+
+def slerp_variation(
+    x1: Genotype,
+    x2: Genotype,
+    key: RNGKey,
+    minval: Optional[float] = None,
+    maxval: Optional[float] = None,
+) -> Genotype:
+    """
+    SLERP variation for genotypes shaped (batch_size, ...).
+    Assumes x1 and x2 have identical shapes.
+    """
+
+    def _slerp_vec(a: jnp.ndarray, b: jnp.ndarray, t: float) -> jnp.ndarray:
+        a_flat = a.reshape(-1)
+        b_flat = b.reshape(-1)
+        a_norm = a_flat / jnp.linalg.norm(a_flat)
+        b_norm = b_flat / jnp.linalg.norm(b_flat)
+        dot = jnp.clip(jnp.dot(a_norm, b_norm), -1.0, 1.0)
+        omega = jnp.arccos(dot)
+        so = jnp.sin(omega)
+
+        interp = jax.lax.cond(
+            so < 1e-10,
+            lambda: (1.0 - t) * a_flat + t * b_flat,
+            lambda: (jnp.sin((1.0 - t) * omega) / so) * a_flat + (jnp.sin(t * omega) / so) * b_flat,
+        )
+        return interp.reshape(a.shape)
+
+    batch_size = jax.tree.leaves(x1)[0].shape[0]
+    t_values = jax.random.uniform(key, shape=(batch_size,), minval=0.0, maxval=1.0)
+
+    def slerp_leaf(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
+        return jax.vmap(_slerp_vec)(a, b, t_values)
+
+    x = jax.tree.map(slerp_leaf, x1, x2)
+
+    if (minval is not None) or (maxval is not None):
+        x = jax.tree.map(lambda x_: jnp.clip(x_, minval, maxval), x)
+
+    return x
