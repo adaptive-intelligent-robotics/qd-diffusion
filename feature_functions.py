@@ -75,6 +75,9 @@ def get_artclip_score_model(feature_name):
 
 
 def dino_feature_extractor(image_np, processor, model, projection_matrix, device):
+    if image_np.ndim == 3 and image_np.shape[0] == 3:
+        # Convert from CHW → HWC
+        image_np = np.transpose(image_np, (1, 2, 0))
     # Convert NumPy float32 image in [-1, 1] or [0, 1] to [0, 255] uint8
     if image_np.dtype != np.uint8:
         if image_np.min() < 0:
@@ -87,7 +90,7 @@ def dino_feature_extractor(image_np, processor, model, projection_matrix, device
 
     # Convert to PIL
     image_pil = Image.fromarray(image_np, mode='RGB')
-
+   
     # Process and get embedding
     inputs = processor(images=image_pil, return_tensors="pt").to(device)
     with torch.no_grad():
