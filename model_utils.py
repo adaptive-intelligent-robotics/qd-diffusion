@@ -5,6 +5,9 @@ import numpy as np
 import os
 import random
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from tqdm import tqdm
 
 # Function to encode text prompt into embeddings
 def get_text_embeddings(prompt,
@@ -246,6 +249,7 @@ def save_final_images(repertoire,
     if init_embedding is not None:
         
         prompt_embeddings = init_embedding.repeat(num_genotypes, 1, 1)
+        prompt_embeddings = prompt_embeddings.reshape(num_genotypes*2, 77, 1024)
 
         final_images = generate_images_from_latents(
             combined_genotypes,
@@ -274,3 +278,109 @@ def save_final_images(repertoire,
     
     # Use the existing save_images function to save the images
     save_images(final_images, filenames=combined_filenames, folder=folder)
+
+
+
+# Plot valid thumbnails in descriptor space for a repertoire
+def plot_thumbnails(
+    repertoire,
+    num_inference_steps,
+    guidance_scale,
+    scheduler,
+    unet,
+    vae,
+    batch_size,
+    save_path,
+    init_embedding=None,
+    init_latent=None,
+):
+    """
+    Filters valid genotypes and plots their decoded images in descriptor space.
+
+    Parameters:
+    - repertoire: Dictionary containing 'genotypes', 'descriptors', and 'fitnesses'.
+    - init_embedding: Optional, used for image generation when given.
+    - init_latent: Optional, used for image generation when given.
+    - All other params: Required for image generation and plotting.
+    """
+
+    valid_genotypes = []
+    valid_descriptors = []
+    valid_fitnesses = []
+
+    for fitness, descriptor, genotype in zip(repertoire.fitnesses, repertoire.descriptors, repertoire.genotypes):
+        if fitness == -jnp.inf:
+            continue
+        valid_genotypes.append(genotype)
+        valid_descriptors.append(descriptor)
+        valid_fitnesses.append(fitness)
+
+    if len(valid_genotypes) == 0:
+        print("No valid genotypes to plot.")
+        return
+
+    valid_descriptors = jnp.array(valid_descriptors)
+
+    if init_embedding is not None:
+        
+        prompt_embeddings = init_embedding.repeat(len(valid_genotypes), 1, 1)
+        prompt_embeddings = prompt_embeddings.reshape(len(valid_genotypes)*2, 77, 1024)
+
+        all_images = generate_images_from_latents(
+            valid_genotypes,
+            prompt_embeddings,
+            num_inference_steps,
+            guidance_scale,
+            scheduler,
+            unet,
+            vae,
+        )
+    
+    elif init_latent is not None:
+        
+        latents = init_latent.repeat(len(valid_genotypes), axis=0)  # Repeat for batch size
+        valid_genotypes = jnp.array(valid_genotypes).reshape(len(valid_genotypes)*2, 77, 1024)
+        
+        all_images = generate_images_from_latents(
+            latents,
+            valid_genotypes,
+            num_inference_steps,
+            guidance_scale,
+            scheduler,
+            unet,
+            vae,
+        )   
+
+    else:
+        raise ValueError("Either init_embedding or init_latent must be provided.")
+
+    assert len(valid_descriptors) == len(all_images), "Mismatch between descriptors and images"
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.scatter(valid_descriptors[:, 0], valid_descriptors[:, 1], s=5, c='lightgray', alpha=0.5)
+
+    for (x, y), img in zip(valid_descriptors, all_images):
+        try:
+            if isinstance(img, torch.Tensor):
+                img = img.cpu().numpy().transpose(1, 2, 0)
+                img = (img * 255).clip(0, 255).astype(np.uint8)
+                img = Image.fromarray(img)
+            elif isinstance(img, np.ndarray):
+                img = (img * 255).clip(0, 255).astype(np.uint8)
+                img = Image.fromarray(img)
+
+            thumbnail = img.resize((256, 256))
+            imagebox = OffsetImage(thumbnail, zoom=0.15)
+            ab = AnnotationBbox(imagebox, (x, y), frameon=False, pad=0.1)
+            ax.add_artist(ab)
+        except Exception as e:
+            print(f"Failed to plot image at ({x}, {y}): {e}")
+
+    ax.set_title("Repertoire Descriptor Space with Image Thumbnails")
+    ax.set_xlabel("Descriptor 1")
+    ax.set_ylabel("Descriptor 2")
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path+"thumbnail_scatter.png", dpi=300)
+    plt.close()
+    print(f"Saved plot to {save_path}")

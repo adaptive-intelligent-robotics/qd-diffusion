@@ -32,6 +32,7 @@ from model_utils import (
     get_text_embeddings,
     generate_images_from_latents,
     fitness_function,
+    plot_thumbnails,
     save_images,
     save_final_images
 )
@@ -400,6 +401,19 @@ def main(config: DictConfig) -> None:
             init_latent=save_latents,
         )
         
+        plot_thumbnails(
+            repertoire=passive_repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
+            batch_size=batch_size,
+            save_path=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
+        )
+        
     elif config.algorithm.name == "adam":
         logger.warning("--- Algorithm initialisation ---")
         
@@ -571,6 +585,19 @@ def main(config: DictConfig) -> None:
             vae=vae,
             n_sample=5,
             folder=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
+        )
+
+        plot_thumbnails(
+            repertoire=passive_repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
+            batch_size=batch_size,
+            save_path=_images_dir + f"final/",
             init_embedding=save_embedding,
             init_latent=save_latents,
         )
@@ -758,7 +785,19 @@ def main(config: DictConfig) -> None:
             init_embedding=save_embedding,
             init_latent=save_latents,
         )
-    
+
+        plot_thumbnails(
+            repertoire=repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
+            batch_size=batch_size,
+            save_path=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
+        )
 
 if __name__ == "__main__":
     main() 
