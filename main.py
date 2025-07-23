@@ -29,6 +29,7 @@ from feature_functions import (
 )
 
 from model_utils import (
+    expand_prompt_embedding,
     get_text_embeddings,
     generate_images_from_latents,
     fitness_function,
@@ -264,7 +265,7 @@ def main(config: DictConfig) -> None:
                                     
             return fitnesses.squeeze(), descriptors.squeeze()
         
-        init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
+        init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)
         
         partial_fitness_fn = partial(cma_es_scoring_fn,
             batch_size=config.algorithm.cma_es.population_size,
@@ -417,7 +418,7 @@ def main(config: DictConfig) -> None:
     elif config.algorithm.name == "adam":
         logger.warning("--- Algorithm initialisation ---")
         
-        init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
+        init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)
         
         generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents,
             prompt_embedding=init_prompt_embeddings,
@@ -630,15 +631,15 @@ def main(config: DictConfig) -> None:
         
         if config.algorithm.variation.genotype == "embedding":
             init_latents = init_latent.repeat(batch_size, axis=0)  # Repeat for batch size
-            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
-            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1) + \
-                torch.randn_like(init_prompt_embedding.repeat(batch_size, 1, 1)) * config.algorithm.variation.iso_sigma
+            init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)
+            init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size) + \
+               torch.randn_like(expand_prompt_embedding(init_prompt_embedding, batch_size)) * config.algorithm.variation.iso_sigma
                             
         elif config.algorithm.variation.genotype == "latents":
             init_latents = init_latent.repeat(batch_size, axis=0)
-            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)  
+            init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)  
             init_latents += jax.random.normal(
-                subkey, shape=init_latents.shape, dtype=jnp.float32
+               subkey, shape=init_latents.shape, dtype=jnp.float32
             ) * config.algorithm.variation.iso_sigma
             
             

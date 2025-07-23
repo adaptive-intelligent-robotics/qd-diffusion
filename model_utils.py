@@ -9,6 +9,16 @@ import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from tqdm import tqdm
 
+def expand_prompt_embedding(prompt_embedding, batch_size):
+    """
+    Takes a [2, 77, 1024] prompt embedding (uncond, cond) and returns
+    [2*batch_size, 77, 1024] with batch_size uncond followed by batch_size cond.
+    """
+    uncond = prompt_embedding[0].unsqueeze(0).repeat(batch_size, 1, 1)  # [batch_size, 77, 1024]
+    cond = prompt_embedding[1].unsqueeze(0).repeat(batch_size, 1, 1)    # [batch_size, 77, 1024]
+    expanded = torch.cat([uncond, cond], dim=0)  # [2 * batch_size, 77, 1024]
+    return expanded
+
 # Function to encode text prompt into embeddings
 def get_text_embeddings(prompt,
         batch_size,
