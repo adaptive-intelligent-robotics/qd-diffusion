@@ -178,16 +178,15 @@ def save_images(images, iteration="", filenames=None, folder="results"):
 
 
 def save_final_images(repertoire,
-        prompt,
         num_inference_steps,
         guidance_scale,
         scheduler,
         unet,
         vae,
-        tokenizer,
-        text_encoder,
         n_sample=5,
-        folder="results"
+        folder="results",
+        init_embedding=None,
+        init_latent=None,
     ):
     """
     Saves non-empty solutions from the repertoire using the provided save_images function.
@@ -241,25 +240,37 @@ def save_final_images(repertoire,
         # Combine the best genotype with the sampled ones
         combined_genotypes = [best_genotype] + sampled_genotypes
         combined_filenames = [best_filename] + sampled_filenames
+        
+    num_genotypes = len(combined_genotypes)
+
+    if init_embedding is not None:
+        
+        prompt_embeddings = init_embedding.repeat(num_genotypes, 1, 1)
+
+        final_images = generate_images_from_latents(
+            combined_genotypes,
+            prompt_embeddings,
+            num_inference_steps,
+            guidance_scale,
+            scheduler,
+            unet,
+            vae,
+        )
     
-    # Step 3: Generate images from combined genotypes
-    prompt_embedding = get_text_embeddings(
-        prompt=prompt,
-        batch_size=len(combined_genotypes),
-        tokenizer=tokenizer,
-        text_encoder=text_encoder,
-        with_grad=False
-    )
-    
-    final_images = generate_images_from_latents(
-        combined_genotypes,
-        prompt_embedding,
-        num_inference_steps,
-        guidance_scale,
-        scheduler,
-        unet,
-        vae,
-    )
+    elif init_latent is not None:
+        
+        latents = init_latent.repeat(num_genotypes, axis=0)  # Repeat for batch size
+        combined_genotypes = jnp.array(combined_genotypes).reshape(num_genotypes*2, 77, 1024)
+        
+        final_images = generate_images_from_latents(
+            latents,
+            combined_genotypes,
+            num_inference_steps,
+            guidance_scale,
+            scheduler,
+            unet,
+            vae,
+        )        
     
     # Use the existing save_images function to save the images
     save_images(final_images, filenames=combined_filenames, folder=folder)

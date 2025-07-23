@@ -129,16 +129,8 @@ def main(config: DictConfig) -> None:
     elif config.algorithm.name == "map_elites":
         batch_size = config.algorithm.map_elites.batch_size
         with_grad = config.algorithm.map_elites.with_grad
-
-    original_prompt_embedding = get_text_embeddings(
-        prompt=config.generation.prompt,
-        batch_size=batch_size, # type: ignore
-        tokenizer=tokenizer,
-        text_encoder=text_encoder,
-        with_grad=with_grad,
-    )
     
-    single_prompt_embedding = get_text_embeddings(
+    init_prompt_embedding = get_text_embeddings(
         prompt=config.generation.prompt,
         batch_size=1,  # type: ignore
         tokenizer=tokenizer,
@@ -205,8 +197,6 @@ def main(config: DictConfig) -> None:
         descriptor_type: str,
     ):
         
-
-    
         # Generate images
         generated_images = generate_images_from_latents_fun(latents, prompt_embedding)
               
@@ -273,9 +263,11 @@ def main(config: DictConfig) -> None:
                                     
             return fitnesses.squeeze(), descriptors.squeeze()
         
+        init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
+        
         partial_fitness_fn = partial(cma_es_scoring_fn,
             batch_size=config.algorithm.cma_es.population_size,
-            prompt_embedding=original_prompt_embedding,
+            prompt_embedding=init_prompt_embeddings,
         )
 
         # Create empty repertoire with default values
@@ -300,7 +292,7 @@ def main(config: DictConfig) -> None:
         
         # Save initial mean image
         init_samples_latents = jnp.reshape(state.mean, (1, 4, 64, 64))
-        init_images = generate_images_from_latents_fn(init_samples_latents, single_prompt_embedding)
+        init_images = generate_images_from_latents_fn(init_samples_latents, init_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], jnp.array([]))
@@ -388,24 +380,33 @@ def main(config: DictConfig) -> None:
         )
         
         # Save final images
-        save_final_images(passive_repertoire,
-            config.generation.prompt,
-            config.generation.num_inference_steps,
-            config.generation.guidance_scale,
-            scheduler,
-            unet,
-            vae,
-            tokenizer,
-            text_encoder,
+        if config.algorithm.variation.genotype == "embedding":
+            save_embedding = None
+            save_latents = init_latent
+            
+        elif config.algorithm.variation.genotype == "latents":
+            save_embedding = init_prompt_embedding
+            save_latents = None
+            
+        save_final_images(repertoire=passive_repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
             n_sample=5,
-            folder=_images_dir + f"final/"
+            folder=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
         )
-    
+        
     elif config.algorithm.name == "adam":
         logger.warning("--- Algorithm initialisation ---")
         
+        init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
+        
         generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents,
-            prompt_embedding=original_prompt_embedding,
+            prompt_embedding=init_prompt_embeddings,
             num_inference_steps=config.generation.num_inference_steps,
             guidance_scale=config.generation.guidance_scale,
             scheduler=scheduler,
@@ -452,12 +453,12 @@ def main(config: DictConfig) -> None:
         )
 
         # Save initial images
-        init_images = generate_images_from_latents_fn(init_genotypes, original_prompt_embedding)
+        init_images = generate_images_from_latents_fn(init_genotypes, init_prompt_embeddings)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
         
         # Evaluate initial population and add to passive repertoire
         key, subkey = jax.random.split(key)
-        fitnesses, descriptors, _ = scoring_function(init_genotypes, original_prompt_embedding, subkey)
+        fitnesses, descriptors, _ = scoring_function(init_genotypes, init_prompt_embeddings, subkey)
         passive_repertoire = passive_repertoire.add(
             jnp.reshape(init_genotypes, (config.algorithm.adam.batch_size, 4, 64, 64)),
             descriptors,
@@ -507,7 +508,7 @@ def main(config: DictConfig) -> None:
 
             # Convert torch to jnp
             genotypes_jnp = jnp.array(init_genotypes_torch.detach().cpu().numpy(), dtype=jnp.float32)
-            fitnesses, descriptors, _ = scoring_function(genotypes_jnp, original_prompt_embedding, key)
+            fitnesses, descriptors, _ = scoring_function(genotypes_jnp, init_prompt_embeddings, key)
             passive_repertoire = passive_repertoire.add(
                 jnp.reshape(genotypes_jnp, (config.algorithm.adam.batch_size, 4, 64, 64)),
                 descriptors,
@@ -554,17 +555,24 @@ def main(config: DictConfig) -> None:
         )
         
         # Save final images
-        save_final_images(passive_repertoire,
-            config.generation.prompt,
-            config.generation.num_inference_steps,
-            config.generation.guidance_scale,
-            scheduler,
-            unet,
-            vae,
-            tokenizer,
-            text_encoder,
+        if config.algorithm.variation.genotype == "embedding":
+            save_embedding = None
+            save_latents = init_latent
+            
+        elif config.algorithm.variation.genotype == "latents":
+            save_embedding = init_prompt_embedding
+            save_latents = None
+            
+        save_final_images(repertoire=passive_repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
             n_sample=5,
-            folder=_images_dir + f"final/"
+            folder=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
         )
         
     elif config.algorithm.name == "map_elites":
@@ -581,7 +589,7 @@ def main(config: DictConfig) -> None:
                 line_sigma=config.algorithm.variation.line_sigma
             )
         
-        else:
+        elif config.algorithm.variation.variation_type == "slerp":
             variation_fn = slerp_variation
 
         mixing_emitter = MixingEmitter(
@@ -591,8 +599,23 @@ def main(config: DictConfig) -> None:
             batch_size=config.algorithm.map_elites.batch_size
         )
         
-        init_latents = jax.random.normal(subkey, shape=(config.algorithm.map_elites.batch_size, 4, 64, 64), dtype=jnp.float32)
-        init_images = generate_images_from_latents_fn(init_latents, original_prompt_embedding)
+        init_latent = jax.random.normal(subkey, shape=(1, 4, 64, 64), dtype=jnp.float32)
+        
+        if config.algorithm.variation.genotype == "embedding":
+            init_latents = init_latent.repeat(batch_size, axis=0)  # Repeat for batch size
+            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)
+            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1) + \
+                torch.randn_like(init_prompt_embedding.repeat(batch_size, 1, 1)) * config.algorithm.variation.iso_sigma
+                            
+        elif config.algorithm.variation.genotype == "latents":
+            init_latents = init_latent.repeat(batch_size, axis=0)
+            init_prompt_embeddings = init_prompt_embedding.repeat(batch_size, 1, 1)  
+            init_latents += jax.random.normal(
+                subkey, shape=init_latents.shape, dtype=jnp.float32
+            ) * config.algorithm.variation.iso_sigma
+            
+            
+        init_images = generate_images_from_latents_fn(init_latents, init_prompt_embeddings)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
 
         # Instantiate MAP-Elites
@@ -605,12 +628,12 @@ def main(config: DictConfig) -> None:
         # Evaluate the initial population
         key, subkey = jax.random.split(key)
         
-        fitnesses, descriptors, extra_scores = scoring_function(init_latents, original_prompt_embedding, subkey)
+        fitnesses, descriptors, extra_scores = scoring_function(init_latents, init_prompt_embeddings, subkey)
         
         # Compute initial repertoire and emitter state
         if config.algorithm.variation.genotype == "embedding":
             
-            embedding_genotypes = original_prompt_embedding.reshape(batch_size, 2, 77, 1024)
+            embedding_genotypes = init_prompt_embeddings.reshape(batch_size, 2, 77, 1024)
 
             repertoire, emitter_state, metrics = map_elites.init_ask_tell(
                 genotypes=jnp.array(embedding_genotypes.detach().cpu().numpy(), dtype=jnp.float32),
@@ -623,7 +646,7 @@ def main(config: DictConfig) -> None:
             
         elif config.algorithm.variation.genotype == "latents":
             repertoire, emitter_state, metrics = map_elites.init_ask_tell(
-                genotypes=init_genotypes,
+                genotypes=init_latents,
                 fitnesses=fitnesses,
                 descriptors=descriptors,
                 centroids=centroids,
@@ -664,7 +687,7 @@ def main(config: DictConfig) -> None:
                 embeddings = genotypes.reshape(2 * batch_size, 77, 1024)
                 fitnesses, descriptors, extra_scores = scoring_function(init_latents, embeddings, subkey)
             elif config.algorithm.variation.genotype == "latents":
-                fitnesses, descriptors, extra_scores = scoring_function(genotypes, original_prompt_embedding, subkey)
+                fitnesses, descriptors, extra_scores = scoring_function(genotypes, init_prompt_embeddings, subkey)
 
             # Update MAP-Elites
             repertoire, emitter_state, current_metrics = map_elites.tell(
@@ -716,19 +739,25 @@ def main(config: DictConfig) -> None:
         )
         
         # Save final images
-        save_final_images(repertoire,
-            config.generation.prompt,
-            config.generation.num_inference_steps,
-            config.generation.guidance_scale,
-            scheduler,
-            unet,
-            vae,
-            tokenizer,
-            text_encoder,
+        if config.algorithm.variation.genotype == "embedding":
+            save_embedding = None
+            save_latents = init_latent
+            
+        elif config.algorithm.variation.genotype == "latents":
+            save_embedding = init_prompt_embedding
+            save_latents = None
+            
+        save_final_images(repertoire=repertoire,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=unet,
+            vae=vae,
             n_sample=5,
-            folder=_images_dir + f"final/"
+            folder=_images_dir + f"final/",
+            init_embedding=save_embedding,
+            init_latent=save_latents,
         )
-        
     
 
 if __name__ == "__main__":
