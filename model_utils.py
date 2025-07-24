@@ -190,7 +190,7 @@ def save_images(images, iteration="", filenames=None, folder="results"):
         
 
 
-def save_final_images(repertoire,
+def save_sample_images(repertoire,
         num_inference_steps,
         guidance_scale,
         scheduler,
@@ -226,7 +226,7 @@ def save_final_images(repertoire,
         valid_genotypes.append(genotype)
         fitnesses.append(fitness[0])
         descriptors.append(descriptor)
-        filename = f"final_image_{fitness[0]}_{descriptor[0]:.4f}_{descriptor[1]:.4f}.png"
+        filename = f"fitness_{fitness[0]}_desc_{descriptor[0]:.4f}_{descriptor[1]:.4f}.png"
         filenames.append(filename)
 
     # Check if we have enough valid genotypes
@@ -261,7 +261,7 @@ def save_final_images(repertoire,
         prompt_embeddings = init_embedding.repeat(num_genotypes, 1, 1)
         prompt_embeddings = prompt_embeddings.reshape(num_genotypes*2, 77, 1024)
 
-        final_images = generate_images_from_latents(
+        images = generate_images_from_latents(
             combined_genotypes,
             prompt_embeddings,
             num_inference_steps,
@@ -276,7 +276,7 @@ def save_final_images(repertoire,
         latents = init_latent.repeat(num_genotypes, axis=0)  # Repeat for batch size
         combined_genotypes = jnp.array(combined_genotypes).reshape(num_genotypes*2, 77, 1024)
         
-        final_images = generate_images_from_latents(
+        images = generate_images_from_latents(
             latents,
             combined_genotypes,
             num_inference_steps,
@@ -287,7 +287,7 @@ def save_final_images(repertoire,
         )        
     
     # Use the existing save_images function to save the images
-    save_images(final_images, filenames=combined_filenames, folder=folder)
+    save_images(images, filenames=combined_filenames, folder=folder)
 
 
 

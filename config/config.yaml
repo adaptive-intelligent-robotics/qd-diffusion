@@ -24,13 +24,13 @@ generation:
 
 # Algorithm configuration
 algorithm:
-  name: "map_elites"  # map_elites, cma_es or adam
+  name: "adam"  # map_elites, cma_es or adam
   seed: 42
   descriptor_type: "dino"  
   descriptor_names: ["dino"]
 
   variation:
-    genotype: "embedding" # "embedding" or "latents"
+    genotype: "latents" # "embedding" or "latents"
     iso_sigma: 0.05
     line_sigma: 0.1
     variation_type: "slerp" # "slerp" or "isoline"
@@ -57,6 +57,7 @@ algorithm:
     with_grad: True
 
 analysis_path: "/workspace/src/output/A dog riding a motorbike/map_elites/2025-07-22_130953_42/"
+checkpoint_period: 1
 
 # Output configuration
 output:

@@ -9,6 +9,7 @@ import torch
 import wandb
 torch.cuda.empty_cache()
 
+from analysis_utils import analyse_repertoire
 from diffusers import (
     UNet2DConditionModel,
     AutoencoderKL,
@@ -33,9 +34,7 @@ from model_utils import (
     get_text_embeddings,
     generate_images_from_latents,
     fitness_function,
-    plot_thumbnails,
-    save_images,
-    save_final_images
+    save_images
 )
 
 import jax
@@ -293,6 +292,7 @@ def main(config: DictConfig) -> None:
         state = cmaes.init()
         
         # Save initial mean image
+        init_latent = None
         init_samples_latents = jnp.reshape(state.mean, (1, 4, 64, 64))
         init_images = generate_images_from_latents_fn(init_samples_latents, init_prompt_embedding)
         save_images(init_images, iteration="init", folder=_images_dir + f"init/")
@@ -358,6 +358,23 @@ def main(config: DictConfig) -> None:
             # check stop condition
             stop_condition = cmaes.stop_condition(state)
 
+            if (i + 1) % config.checkpoint_period == 0:
+                analyse_repertoire(
+                    config,
+                    i+1,
+                    metrics,
+                    passive_repertoire,
+                    init_prompt_embedding,
+                    init_latent,
+                    scheduler,
+                    unet,
+                    vae,
+                    batch_size,
+                    images_dir=_images_dir,
+                    repertoire_dir=_repertoire_dir,
+                    save_name=f"iteration_{i+1}"
+                )
+
             if stop_condition:
                 break
 
@@ -365,60 +382,27 @@ def main(config: DictConfig) -> None:
         logger.warning(f"Num iterations before stop condition: {i}")  
 
         # Plot results
-        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.cma_es.max_iterations),
-            metrics=metrics,
-            repertoire=passive_repertoire,
-            min_descriptor=config.algorithm.map_elites.min_descriptor,
-            max_descriptor=config.algorithm.map_elites.max_descriptor
-        )
-        fig.savefig(_images_dir + f"passive_repertoire-results.png")
-        
-        # Save final repertoire
-        np.savez(_repertoire_dir + f"final_passive_repertoire.npz", 
-            genotypes=passive_repertoire.genotypes,
-            descriptors=passive_repertoire.descriptors,
-            fitnesses=passive_repertoire.fitnesses,
-            centroids=centroids
-        )
-        
-        # Save final images
-        if config.algorithm.variation.genotype == "embedding":
-            save_embedding = None
-            save_latents = init_latent
-            
-        elif config.algorithm.variation.genotype == "latents":
-            save_embedding = init_prompt_embedding
-            save_latents = None
-            
-        save_final_images(repertoire=passive_repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            n_sample=5,
-            folder=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
-        )
-        
-        plot_thumbnails(
-            repertoire=passive_repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            batch_size=batch_size,
-            save_path=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
+        analyse_repertoire(
+            config,
+            i+1,
+            metrics,
+            passive_repertoire,
+            init_prompt_embedding,
+            init_latent,
+            scheduler,
+            unet,
+            vae,
+            batch_size,
+            images_dir=_images_dir,
+            repertoire_dir=_repertoire_dir,
+            save_name="final"
         )
         
     elif config.algorithm.name == "adam":
         logger.warning("--- Algorithm initialisation ---")
         
         init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)
+        init_latent = None
         
         generate_images_from_latents_with_grad_fn = partial(generate_images_from_latents,
             prompt_embedding=init_prompt_embeddings,
@@ -479,7 +463,7 @@ def main(config: DictConfig) -> None:
             descriptors,
             fitnesses
         )                    
-        del init_genotypes, init_genotypes_np, init_images, fitnesses, descriptors, centroids
+        del init_genotypes, init_genotypes_np, init_images, fitnesses, descriptors
             
         # Initialize Adam optimizer
         adam_optimiser = torch.optim.Adam([init_genotypes_torch], lr=config.algorithm.adam.learning_rate)
@@ -552,55 +536,39 @@ def main(config: DictConfig) -> None:
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
 
+            # Plot visuals and save repertoire every checkpoint_period iterations
+            if (i + 1) % config.checkpoint_period == 0:
+                analyse_repertoire(
+                    config,
+                    i+1,
+                    metrics,
+                    passive_repertoire,
+                    init_prompt_embedding,
+                    init_latent,
+                    scheduler,
+                    unet,
+                    vae,
+                    batch_size,
+                    images_dir=_images_dir,
+                    repertoire_dir=_repertoire_dir,
+                    save_name=f"iteration_{i+1}"
+                )
+                
         # Plot results
-        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.adam.max_iterations),
-            metrics=metrics,
-            repertoire=passive_repertoire,
-            min_descriptor=config.algorithm.map_elites.min_descriptor,
-            max_descriptor=config.algorithm.map_elites.max_descriptor
-        )
-        fig.savefig(_images_dir + f"passive_repertoire-results.png")
-        
-        # Save final repertoire
-        np.savez(_repertoire_dir + f"final_passive_repertoire.npz", 
-            genotypes=passive_repertoire.genotypes,
-            descriptors=passive_repertoire.descriptors,
-            fitnesses=passive_repertoire.fitnesses,
-            centroids=passive_repertoire.centroids
-        )
-        
-        # Save final images
-        if config.algorithm.variation.genotype == "embedding":
-            save_embedding = None
-            save_latents = init_latent
-            
-        elif config.algorithm.variation.genotype == "latents":
-            save_embedding = init_prompt_embedding
-            save_latents = None
-            
-        save_final_images(repertoire=passive_repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            n_sample=5,
-            folder=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
-        )
-
-        plot_thumbnails(
-            repertoire=passive_repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            batch_size=batch_size,
-            save_path=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
+        analyse_repertoire(
+            config,
+            i+1,
+            metrics,
+            passive_repertoire,
+            init_prompt_embedding,
+            init_latent,
+            scheduler,
+            unet,
+            vae,
+            batch_size,
+            images_dir=_images_dir,
+            repertoire_dir=_repertoire_dir,
+            save_name="final"
         )
         
     elif config.algorithm.name == "map_elites":
@@ -746,58 +714,38 @@ def main(config: DictConfig) -> None:
             # Concatenate
             current_metrics = jax.tree.map(lambda x: jnp.array([x]), current_metrics)
             metrics = jax.tree.map(lambda metric, current_metric: jnp.concatenate([metric, current_metric], axis=0), metrics, current_metrics)
-
-
-                   
-        # Plot results
-        fig, axes = plot_map_elites_results(env_steps=range(config.algorithm.map_elites.max_iterations),
-            metrics=metrics,
-            repertoire=repertoire,
-            min_descriptor=config.algorithm.map_elites.min_descriptor,
-            max_descriptor=config.algorithm.map_elites.max_descriptor
-        )
-        fig.savefig(_images_dir + f"mapelites-results.png")
-        
-        # Save final repertoire
-        np.savez(_repertoire_dir + f"final_repertoire.npz",
-            genotypes=repertoire.genotypes,
-            descriptors=repertoire.descriptors,
-            fitnesses=repertoire.fitnesses,
-            centroids=centroids
-        )
-        
-        # Save final images
-        if config.algorithm.variation.genotype == "embedding":
-            save_embedding = None
-            save_latents = init_latent
             
-        elif config.algorithm.variation.genotype == "latents":
-            save_embedding = init_prompt_embedding
-            save_latents = None
+            if (i + 1) % config.checkpoint_period == 0:
+                analyse_repertoire(
+                    config,
+                    i+1,
+                    metrics,
+                    repertoire,
+                    init_prompt_embedding,
+                    init_latent,
+                    scheduler,
+                    unet,
+                    vae,
+                    batch_size,
+                    images_dir=_images_dir,
+                    repertoire_dir=_repertoire_dir,
+                    save_name=f"iteration_{i+1}"
+                )
             
-        save_final_images(repertoire=repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            n_sample=5,
-            folder=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
-        )
-
-        plot_thumbnails(
-            repertoire=repertoire,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
-            scheduler=scheduler,
-            unet=unet,
-            vae=vae,
-            batch_size=batch_size,
-            save_path=_images_dir + f"final/",
-            init_embedding=save_embedding,
-            init_latent=save_latents,
+        analyse_repertoire(
+            config,
+            i+1,
+            metrics,
+            repertoire,
+            init_prompt_embedding,
+            init_latent,
+            scheduler,
+            unet,
+            vae,
+            batch_size,
+            images_dir=_images_dir,
+            repertoire_dir=_repertoire_dir,
+            save_name="final"
         )
 
 if __name__ == "__main__":
