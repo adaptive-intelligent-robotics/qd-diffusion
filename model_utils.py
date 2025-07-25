@@ -9,6 +9,46 @@ import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from tqdm import tqdm
 
+def toggle_prompt_embedding_shape(embedding):
+    """
+    Toggle shape between:
+    - [2*B, 77, 1024] → [B, 2, 77, 1024]
+    - [B, 2, 77, 1024] → [2*B, 77, 1024]
+
+    Works with both PyTorch tensors and JAX arrays.
+    Assumes uncond + cond are stacked vertically in the 2B form.
+    """
+    # Determine backend
+    if isinstance(embedding, torch.Tensor):
+        backend = "torch"
+        ndim = embedding.ndim
+    elif isinstance(embedding, jnp.ndarray):
+        backend = "jax"
+        ndim = embedding.ndim
+    else:
+        raise TypeError(f"Unsupported type: {type(embedding)}")
+
+    # Toggle shapes
+    if ndim == 3:
+        B = embedding.shape[0] // 2
+        uncond = embedding[:B]
+        cond = embedding[B:]
+        if backend == "torch":
+            return torch.stack([uncond, cond], dim=1)
+        else:
+            return jnp.stack([uncond, cond], axis=1)
+
+    elif ndim == 4:
+        uncond = embedding[:, 0]
+        cond = embedding[:, 1]
+        if backend == "torch":
+            return torch.cat([uncond, cond], dim=0)
+        else:
+            return jnp.concatenate([uncond, cond], axis=0)
+
+    else:
+        raise ValueError(f"Expected input with 3 or 4 dimensions, got {ndim}")
+    
 def expand_prompt_embedding(prompt_embedding, batch_size):
     """
     Takes a [2, 77, 1024] prompt embedding (uncond, cond) and returns
@@ -258,9 +298,8 @@ def save_sample_images(repertoire,
 
     if init_embedding is not None:
         
-        prompt_embeddings = init_embedding.repeat(num_genotypes, 1, 1)
-        prompt_embeddings = prompt_embeddings.reshape(num_genotypes*2, 77, 1024)
-
+        prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=num_genotypes)  # [2*B, 77, 1024]
+        
         images = generate_images_from_latents(
             combined_genotypes,
             prompt_embeddings,
@@ -274,7 +313,7 @@ def save_sample_images(repertoire,
     elif init_latent is not None:
         
         latents = init_latent.repeat(num_genotypes, axis=0)  # Repeat for batch size
-        combined_genotypes = jnp.array(combined_genotypes).reshape(num_genotypes*2, 77, 1024)
+        combined_genotypes = toggle_prompt_embedding_shape(jnp.array(combined_genotypes))  # [2*B, 77, 1024]
         
         images = generate_images_from_latents(
             latents,
@@ -333,9 +372,8 @@ def plot_thumbnails(
 
     if init_embedding is not None:
         
-        prompt_embeddings = init_embedding.repeat(len(valid_genotypes), 1, 1)
-        prompt_embeddings = prompt_embeddings.reshape(len(valid_genotypes)*2, 77, 1024)
-
+        prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=len(valid_genotypes))  # [2*B, 77, 1024]
+        
         all_images = generate_images_from_latents(
             valid_genotypes,
             prompt_embeddings,
@@ -349,7 +387,7 @@ def plot_thumbnails(
     elif init_latent is not None:
         
         latents = init_latent.repeat(len(valid_genotypes), axis=0)  # Repeat for batch size
-        valid_genotypes = jnp.array(valid_genotypes).reshape(len(valid_genotypes)*2, 77, 1024)
+        valid_genotypes = toggle_prompt_embedding_shape(jnp.array(valid_genotypes))  # [2*B, 77, 1024]
         
         all_images = generate_images_from_latents(
             latents,

@@ -31,6 +31,7 @@ from feature_functions import (
 
 from model_utils import (
     expand_prompt_embedding,
+    toggle_prompt_embedding_shape,
     get_text_embeddings,
     generate_images_from_latents,
     fitness_function,
@@ -599,7 +600,6 @@ def main(config: DictConfig) -> None:
         
         if config.algorithm.variation.genotype == "embedding":
             init_latents = init_latent.repeat(batch_size, axis=0)  # Repeat for batch size
-            init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size)
             init_prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, batch_size) + \
                torch.randn_like(expand_prompt_embedding(init_prompt_embedding, batch_size)) * config.algorithm.variation.iso_sigma
                             
@@ -629,7 +629,8 @@ def main(config: DictConfig) -> None:
         # Compute initial repertoire and emitter state
         if config.algorithm.variation.genotype == "embedding":
             
-            embedding_genotypes = init_prompt_embeddings.reshape(batch_size, 2, 77, 1024)
+            # [2*batch_size, 77, 1024] -> [batch_size, 2, 77, 1024]
+            embedding_genotypes = toggle_prompt_embedding_shape(init_prompt_embeddings)
 
             repertoire, emitter_state, metrics = map_elites.init_ask_tell(
                 genotypes=jnp.array(embedding_genotypes.detach().cpu().numpy(), dtype=jnp.float32),
@@ -680,8 +681,10 @@ def main(config: DictConfig) -> None:
             # This is where custom evaluations on CPU or GPU can be added.
             key, subkey = jax.random.split(key)
             if config.algorithm.variation.genotype == "embedding":
-                embeddings = genotypes.reshape(2 * batch_size, 77, 1024)
+                # [batch_size, 2, 77, 1024] -> [2*batch_size, 77, 1024]
+                embeddings = toggle_prompt_embedding_shape(genotypes)
                 fitnesses, descriptors, extra_scores = scoring_function(init_latents, embeddings, subkey)
+                
             elif config.algorithm.variation.genotype == "latents":
                 fitnesses, descriptors, extra_scores = scoring_function(genotypes, init_prompt_embeddings, subkey)
 
