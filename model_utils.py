@@ -370,34 +370,38 @@ def plot_thumbnails(
 
     valid_descriptors = jnp.array(valid_descriptors)
 
+    batch_size = 8  # Adjust as needed based on available memory
     if init_embedding is not None:
-        
-        prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=len(valid_genotypes))  # [2*B, 77, 1024]
-        
-        all_images = generate_images_from_latents(
-            valid_genotypes,
-            prompt_embeddings,
-            num_inference_steps,
-            guidance_scale,
-            scheduler,
-            unet,
-            vae,
-        )
-    
+        all_images = []
+        for i in range(0, len(valid_genotypes), batch_size):
+            genotypes_batch = valid_genotypes[i:i+batch_size]
+            prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=len(genotypes_batch))
+            images = generate_images_from_latents(
+                genotypes_batch,
+                prompt_embeddings,
+                num_inference_steps,
+                guidance_scale,
+                scheduler,
+                unet,
+                vae,
+            )
+            all_images.extend(images)
     elif init_latent is not None:
-        
-        latents = init_latent.repeat(len(valid_genotypes), axis=0)  # Repeat for batch size
-        valid_genotypes = toggle_prompt_embedding_shape(jnp.array(valid_genotypes))  # [2*B, 77, 1024]
-        
-        all_images = generate_images_from_latents(
-            latents,
-            valid_genotypes,
-            num_inference_steps,
-            guidance_scale,
-            scheduler,
-            unet,
-            vae,
-        )   
+        all_images = []
+        for i in range(0, len(valid_genotypes), batch_size):
+            genotypes_batch = valid_genotypes[i:i+batch_size]
+            latents_batch = init_latent.repeat(len(genotypes_batch), axis=0)
+            genotypes_batch = toggle_prompt_embedding_shape(jnp.array(genotypes_batch))
+            images = generate_images_from_latents(
+                latents_batch,
+                genotypes_batch,
+                num_inference_steps,
+                guidance_scale,
+                scheduler,
+                unet,
+                vae,
+            )
+            all_images.extend(images)
 
     else:
         raise ValueError("Either init_embedding or init_latent must be provided.")
