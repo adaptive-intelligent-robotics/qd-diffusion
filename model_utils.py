@@ -342,6 +342,7 @@ def plot_thumbnails(
     save_path,
     init_embedding=None,
     init_latent=None,
+    save_image=True,
 ):
     """
     Filters valid genotypes and plots their decoded images in descriptor space.
@@ -433,6 +434,9 @@ def plot_thumbnails(
     ax.set_ylabel("Descriptor 2")
     ax.grid(True)
     plt.tight_layout()
-    plt.savefig(save_path+"thumbnail_scatter.png", dpi=300)
-    plt.close()
-    print(f"Saved plot to {save_path}")
+    if save_image:
+        plt.savefig(save_path+"thumbnail_scatter.png", dpi=300)
+        plt.close()
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
