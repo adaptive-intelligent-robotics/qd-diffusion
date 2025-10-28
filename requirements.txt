@@ -33,6 +33,7 @@ scipy
 tensorboardx
 tensorflow-probability
 timm
+torchmetrics
 torchvision
 transformers
 tqdm
