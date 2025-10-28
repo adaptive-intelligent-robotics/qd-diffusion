@@ -5,6 +5,7 @@ accelerate
 brax
 chex
 diffusers
+dreamsim
 flax
 ftfy
 hydra-core
