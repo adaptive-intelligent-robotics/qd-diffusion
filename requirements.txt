@@ -26,6 +26,7 @@ optax
 pandas
 pillow
 protobuf
+pyribs
 regex
 requests
 scikit-learn
