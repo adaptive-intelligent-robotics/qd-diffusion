@@ -26,9 +26,9 @@ optax
 pandas
 pillow
 protobuf
-pyribs
 regex
 requests
+ribs
 scikit-learn
 scipy
 tensorboardx
