@@ -5,7 +5,6 @@ import gc
 import hydra
 import logging
 import numpy as np
-import time
 import torch
 import wandb
 torch.cuda.empty_cache()
@@ -19,6 +18,7 @@ from functools import partial
 from image_utils import (
     save_image,
 )
+from metrics import CSVLogger, me_metrics_function
 from model_utils import (
     toggle_prompt_embedding_shape,
     get_text_embeddings,
@@ -34,7 +34,6 @@ from transformers import (
     CLIPModel,
     CLIPTokenizerFast,
 )
-from tqdm import trange
 
 os.environ["WANDB_MODE"] = "disabled"
 
@@ -50,6 +49,7 @@ def main(config: DictConfig) -> None:
     logging.getLogger().handlers[0].setLevel(logging.INFO)
     logger = logging.getLogger(f"{__name__}")
 
+        
     # Debug logging for directories
     output_dir = hydra.core.hydra_config.HydraConfig.get().run.dir
     logger.warning(f"Hydra output directory: {output_dir}")
@@ -78,7 +78,12 @@ def main(config: DictConfig) -> None:
     os.makedirs(_offspring_dir, exist_ok=True)
     os.makedirs(_images_dir + f"init/", exist_ok=True)
     os.makedirs(_images_dir + f"final/", exist_ok=True)
-
+    
+    metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], np.array([]))
+    csv_logger = CSVLogger(
+        filename=_metrics_dir + f"mapelites-logs.csv",
+        header=list(metrics.keys())
+    )
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
     pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to("cuda")
@@ -176,7 +181,7 @@ def main(config: DictConfig) -> None:
             
     if config.algorithm.name == "map_elites":
         logger.warning("--- Algorithm initialisation ---")
-        for itr in trange(1, config.algorithm.map_elites.max_iterations + 1, desc="Iterations"):
+        for itr in range(1, config.algorithm.map_elites.max_iterations + 1):
             solutions = scheduler.ask()
             
             if config.algorithm.genotype == "embedding":
@@ -189,6 +194,15 @@ def main(config: DictConfig) -> None:
                 save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir)
                         
             scheduler.tell(fitnesses, descriptors)
+            
+            current_metrics = me_metrics_function(scheduler.archive, itr, config)
+            wandb.log(current_metrics)
+            csv_logger.log(current_metrics)
+            logger.warning(f"--- ITERATION: {itr} ---")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+            logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
+            logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
+
             
 if __name__ == "__main__":
     main() 
