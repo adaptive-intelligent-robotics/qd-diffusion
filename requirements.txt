@@ -43,4 +43,5 @@ typing-extensions
 umap-learn
 xformers
 wandb
+warp-lang
 
