@@ -23,6 +23,7 @@ from model_utils import (
     toggle_prompt_embedding_shape,
     get_text_embeddings,
     generate_images_from_latents,
+    save_offspring_data,
 )
 
 from omegaconf import DictConfig, OmegaConf
@@ -64,13 +65,17 @@ def main(config: DictConfig) -> None:
     )
 
     # Make directories for saving data
+    _initial_values_dir = os.path.join(output_dir, "initial_values/")
     _images_dir = os.path.join(output_dir, "images/",)
     _metrics_dir = os.path.join(output_dir, "metrics/")
     _repertoire_dir = os.path.join(output_dir, "repertoire/")
+    _offspring_dir = os.path.join(output_dir, "offspring/")
 
+    os.makedirs(_initial_values_dir, exist_ok=True)
     os.makedirs(_images_dir, exist_ok=True)
     os.makedirs(_metrics_dir, exist_ok=True)
     os.makedirs(_repertoire_dir, exist_ok=True)
+    os.makedirs(_offspring_dir, exist_ok=True)
     os.makedirs(_images_dir + f"init/", exist_ok=True)
     os.makedirs(_images_dir + f"final/", exist_ok=True)
 
@@ -86,33 +91,6 @@ def main(config: DictConfig) -> None:
     torch.manual_seed(config.algorithm.seed)
     torch.cuda.manual_seed_all(config.algorithm.seed)
     np.random.seed(config.algorithm.seed)
-    
-    
-    # Create initial images 
-    init_prompt_embeddings = get_text_embeddings(
-        prompt=config.generation.prompt,
-        batch_size=config.emitter.batch_size,
-        tokenizer=pipe.tokenizer,
-        text_encoder=pipe.text_encoder,
-        with_grad=False,
-    ) # [batch_size * 2, 77, 768]
-    
-    init_latents = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
-    init_latents = init_latents.repeat(config.emitter.batch_size, 1, 1, 1)
-    init_latents *= scheduler.init_noise_sigma
-    
-    init_images = generate_images_from_latents(
-        latents=init_latents,
-        prompt_embedding=init_prompt_embeddings,
-        vae=pipe.vae,
-        unet=pipe.unet,
-        scheduler=scheduler,
-        num_inference_steps=config.generation.num_inference_steps,
-        guidance_scale=config.generation.guidance_scale,
-    )
-    
-    for img in init_images:
-        save_image(img, os.path.join(_images_dir, "init/initial_image.png"))
     
     # Set up scoring function
     generate_images_from_latents_fn = partial(generate_images_from_latents,
@@ -132,9 +110,31 @@ def main(config: DictConfig) -> None:
         clip_tokenizer=clip_tokenizer,
         generate_images_from_latents_fn=generate_images_from_latents_fn,
         generator=generator,
-        save_dir=output_dir,
+        save_dir=_initial_values_dir,
     )
     
+    # Create initial images 
+    init_prompt_embeddings = get_text_embeddings(
+        prompt=config.generation.prompt,
+        batch_size=config.emitter.batch_size,
+        tokenizer=pipe.tokenizer,
+        text_encoder=pipe.text_encoder,
+        with_grad=False,
+    ) # [batch_size * 2, 77, 768]
+    torch.save(init_prompt_embeddings.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embeddings.pt"))
+    
+    init_latents = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
+    init_latents = init_latents.repeat(config.emitter.batch_size, 1, 1, 1)
+    init_latents *= scheduler.init_noise_sigma
+    torch.save(init_latents.cpu(), os.path.join(_initial_values_dir, "initial_latents.pt"))
+    
+    init_fitnesses, init_descriptors, init_images = scoring_fn(init_latents, init_prompt_embeddings)
+
+    torch.save(init_fitnesses, os.path.join(_initial_values_dir, "initial_fitnesses.pt"))
+    torch.save(init_descriptors, os.path.join(_initial_values_dir, "initial_descriptors.pt"))
+    for i, img in enumerate(init_images):
+        save_image(img, os.path.join(_images_dir, f"init/initial_image_{i}.png"))
+        
     # Set up MAP-Elites
     if config.algorithm.name == "map_elites":
 
@@ -182,10 +182,12 @@ def main(config: DictConfig) -> None:
             if config.algorithm.genotype == "embedding":
                 solutions = toggle_prompt_embedding_shape(solutions) # Convert to [batch_size * 2, 77, 768]
                 fitnesses, descriptors, images = scoring_fn(init_latents, solutions)
+                save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir)
                 
             elif config.algorithm.genotype == "latents":
                 fitnesses, descriptors, images = scoring_fn(solutions, init_prompt_embeddings.cpu().detach())
-
+                save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir)
+                        
             scheduler.tell(fitnesses, descriptors)
             
 if __name__ == "__main__":

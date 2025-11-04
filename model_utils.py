@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from tqdm import tqdm
+from image_utils import save_image
 
 def toggle_prompt_embedding_shape(embedding):
     """
@@ -93,6 +94,23 @@ def get_text_embeddings(prompt,
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings]) 
     return text_embeddings.detach()
 
+def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, offspring_dir, images_dir):
+    
+    if config.save_offspring_data:
+        if config.algorithm.genotype == "embedding":
+            torch.save(solutions, os.path.join(offspring_dir, f"{itr}_prompt_embeddings.pt"))
+        elif config.algorithm.genotype == "latents":
+            torch.save(solutions, os.path.join(offspring_dir, f"{itr}_latents.pt"))
+        torch.save(fitnesses, os.path.join(offspring_dir, f"{itr}_fitnesses.pt"))
+        torch.save(descriptors, os.path.join(offspring_dir, f"{itr}_descriptors.pt"))
+        
+    if config.save_images:
+        itr_image_dir = os.path.join(images_dir, f"offspring_{itr}/")
+        os.makedirs(itr_image_dir, exist_ok=True)
+        for i, img in enumerate(images):
+            save_image(img, os.path.join(itr_image_dir, f"offspring_image_{i}.png"))
+    
+    return 
 
 def generate_images_from_latents(
     latents,

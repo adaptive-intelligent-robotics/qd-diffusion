@@ -22,11 +22,13 @@ generation:
   negative_prompt: ""
   num_images_per_prompt: 1
 
+# Descriptor Params
 descriptor:
   name: "dino-v2"
   project_desc: True
   projection_dim: 2
 
+# Emitter Params
 emitter:
   name: "gaussian"
   batch_size: 4
@@ -38,10 +40,8 @@ emitter:
 algorithm:
   name: "map_elites"  # map_elites, cma_es or adam
   seed: 42
-  genotype: "embedding" # "embedding" or "latents"
+  genotype: "latents" # "embedding" or "latents"
   max_pop_size: 100
-
-
 
   map_elites:
     batch_size: 4
@@ -69,7 +69,9 @@ algorithm:
   #   max_iterations: 200
   #   with_grad: False
 
-checkpoint_period: 50
+# Saving params
+save_offspring_data: True
+save_images: True
 
 # Output configuration
 output:
