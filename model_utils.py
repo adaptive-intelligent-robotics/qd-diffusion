@@ -12,39 +12,44 @@ from tqdm import tqdm
 def toggle_prompt_embedding_shape(embedding):
     """
     Toggle shape between:
-    - [2*B, 77, 1024] → [B, 2, 77, 1024]
-    - [B, 2, 77, 1024] → [2*B, 77, 1024]
+    - [2*B, 77, 1024] -> [B, 2, 77, 1024]
+    - [B, 2, 77, 1024] -> [2*B, 77, 1024]
 
-    Works with both PyTorch tensors and JAX arrays.
-    Assumes uncond + cond are stacked vertically in the 2B form.
+    Works with both PyTorch tensors and NumPy arrays.
+    Assumes uncond + cond are stacked vertically in the 2*B form.
     """
     # Determine backend
     if isinstance(embedding, torch.Tensor):
         backend = "torch"
-        ndim = embedding.ndim
-    elif isinstance(embedding, jnp.ndarray):
-        backend = "jax"
-        ndim = embedding.ndim
+    elif isinstance(embedding, np.ndarray):
+        backend = "numpy"
     else:
-        raise TypeError(f"Unsupported type: {type(embedding)}")
+        raise TypeError(f"Unsupported type: {type(embedding)}. Must be torch.Tensor or np.ndarray.")
+
+    # Get number of dimensions
+    ndim = embedding.ndim
 
     # Toggle shapes
     if ndim == 3:
+        # Shape is [2*B, 77, 1024], convert to [B, 2, 77, 1024]
         B = embedding.shape[0] // 2
         uncond = embedding[:B]
         cond = embedding[B:]
+        
         if backend == "torch":
             return torch.stack([uncond, cond], dim=1)
-        else:
-            return jnp.stack([uncond, cond], axis=1)
+        else: # backend == "numpy"
+            return np.stack([uncond, cond], axis=1)
 
     elif ndim == 4:
+        # Shape is [B, 2, 77, 1024], convert to [2*B, 77, 1024]
         uncond = embedding[:, 0]
         cond = embedding[:, 1]
+        
         if backend == "torch":
             return torch.cat([uncond, cond], dim=0)
-        else:
-            return jnp.concatenate([uncond, cond], axis=0)
+        else: # backend == "numpy"
+            return np.concatenate([uncond, cond], axis=0)
 
     else:
         raise ValueError(f"Expected input with 3 or 4 dimensions, got {ndim}")
@@ -187,11 +192,8 @@ def fitness_function(generated_images,
         # If gradients are needed, return the tensor directly
         return fitnesses_torch
     
-    else:
-        fitnesses_np = fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
-        fitnesses = jnp.array(fitnesses_np, dtype=jnp.float32)  # Convert to JAX dtype
-        
-        return fitnesses
+    else:        
+        return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
 
 
 def save_images(images, iteration="", filenames=None, folder="results"):
