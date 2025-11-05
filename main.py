@@ -27,6 +27,7 @@ from model_utils import (
 )
 
 from omegaconf import DictConfig, OmegaConf
+from repertoires.dns import DNSArchive
 from ribs.archives import GridArchive
 from ribs.schedulers import Scheduler
 from scoring_function import get_scoring_function
@@ -106,9 +107,14 @@ def main(config: DictConfig) -> None:
         vae=pipe.vae,
     )
     
-    scoring_fn = get_scoring_function(
+    if config.algorithm.name == "map_elites":
+        project_desc = True
+    else:
+        project_desc = config.descriptor.project_desc
+    
+    scoring_fn, descriptor_dim = get_scoring_function(
         descriptor_name=config.descriptor.name,
-        project_desc=config.descriptor.project_desc,
+        project_desc=project_desc,
         project_dim=config.descriptor.projection_dim,
         prompt=config.generation.prompt,
         clip_model=clip_model,
@@ -158,6 +164,28 @@ def main(config: DictConfig) -> None:
                 ranges=config.algorithm.map_elites.grid_ranges,
                 seed=config.algorithm.seed,
             )
+    
+    # Set up DNS:
+    if config.algorithm.genotype == "embedding":
+        init_prompt_embeddings = toggle_prompt_embedding_shape(init_prompt_embeddings) # Convert to [batch_size, 2, 77, 768]
+        archive = DNSArchive(
+            solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
+            measure_dim=descriptor_dim,
+            max_size=config.algorithm.max_pop_size,
+            k=config.algorithm.dns.k,
+            distance_metric=config.algorithm.dns.distance_metric,
+            seed=config.algorithm.seed,
+        )
+    elif config.algorithm.genotype == "latents":
+        archive = DNSArchive(
+            solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
+            measure_dim=descriptor_dim,
+            max_size=config.algorithm.max_pop_size,
+            k=config.algorithm.dns.k,
+            distance_metric=config.algorithm.dns.distance_metric,
+            seed=config.algorithm.seed,
+        )
+        
       
     if config.emitter.name == "gaussian":
         if config.algorithm.genotype == "embedding":
@@ -179,9 +207,9 @@ def main(config: DictConfig) -> None:
             
     scheduler = Scheduler(archive, [emitter])
             
-    if config.algorithm.name == "map_elites":
+    if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":
         logger.warning("--- Algorithm initialisation ---")
-        for itr in range(1, config.algorithm.map_elites.max_iterations + 1):
+        for itr in range(1, config.algorithm.max_iterations + 1):
             solutions = scheduler.ask()
             
             if config.algorithm.genotype == "embedding":

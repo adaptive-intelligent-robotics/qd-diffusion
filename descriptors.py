@@ -85,8 +85,10 @@ def get_descriptor_fun(
         if project_desc == True:
             projection_matrix = torch.randn(projection_dim, 768, device="cuda", generator=generator)
             torch.save(projection_matrix, f"{save_dir}/descriptor_projection_matrix.pt")
+            descriptor_dim = projection_dim
         else:
             projection_matrix = None
+            descriptor_dim = 768
             
         descriptor_fn =  partial(
             dino_feature_extractor,
@@ -119,8 +121,10 @@ def get_descriptor_fun(
         if project_desc == True:
             projection_matrix = torch.randn(projection_dim, 768, device="cuda", generator=generator)
             torch.save(projection_matrix, f"{save_dir}/descriptor_projection_matrix.pt")
+            descriptor_dim = projection_dim
         else:
             projection_matrix = None
+            descriptor_dim = 768
         
         descriptor_fn =  partial(
             dream_sim_feature_extractor,
@@ -130,4 +134,4 @@ def get_descriptor_fun(
             device="cuda"
         )
     
-    return descriptor_fn
+    return descriptor_fn, descriptor_dim

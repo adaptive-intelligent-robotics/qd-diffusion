@@ -39,7 +39,7 @@ def get_scoring_function(
     save_dir,
 ):
     
-    descriptor_fn = get_descriptor_fun(
+    descriptor_fn, descriptor_dim = get_descriptor_fun(
         descriptor_name=descriptor_name,
         project_desc=project_desc,
         projection_dim=project_dim,
@@ -59,4 +59,4 @@ def get_scoring_function(
         descriptor_fun=descriptor_fn,
     )
     
-    return scoring_function
+    return scoring_function, descriptor_dim

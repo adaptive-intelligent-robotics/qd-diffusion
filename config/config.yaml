@@ -1,6 +1,6 @@
 hydra:
     run:
-        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
+        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}/${algorithm.genotype}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
     sweep:
         dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}
     output_subdir: .
@@ -25,7 +25,7 @@ generation:
 # Descriptor Params
 descriptor:
   name: "dino-v2"
-  project_desc: True
+  project_desc: False
   projection_dim: 2
 
 # Emitter Params
@@ -38,10 +38,11 @@ emitter:
 
 # Algorithm configuration
 algorithm:
-  name: "map_elites"  # map_elites, cma_es or adam
+  name: "dns"  # map_elites, dns, cma_es or adam
   seed: 42
   genotype: "latents" # "embedding" or "latents"
   max_pop_size: 100
+  max_iterations: 200
 
   map_elites:
     batch_size: 4
@@ -51,10 +52,14 @@ algorithm:
       - [-50.0, 50.0]
     num_init_cvt_samples: 50000
     num_centroids: 1024
-    max_iterations: 200
     min_descriptor: -50.0
     max_descriptor: 50.0
     with_grad: False
+  dns:
+    k: 3
+    distance_metric: "cosine"
+
+
   # adam:
   #   learning_rate: 0.05
   #   max_iterations: 1000
