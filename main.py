@@ -14,6 +14,7 @@ from diffusers import (
     StableDiffusionPipeline
 )
 from emitters.custom_gaussian import CustomGaussianEmitter
+from emitters.latent_emitter import LatentMutationEmitter
 from functools import partial
 from image_utils import (
     save_image,
@@ -199,12 +200,34 @@ def main(config: DictConfig) -> None:
         elif config.algorithm.genotype == "latents":
             emitter = CustomGaussianEmitter(
                 archive=archive,
-                initial_solutions=init_latents.cpu().numpy().squeeze(),
+                initial_solutions=init_latents.cpu().numpy(),
                 sigma=config.emitter.gaussian.latents_sigma,
                 batch_size=config.emitter.batch_size,
                 seed=config.algorithm.seed,
             )
-            
+    elif config.emitter.name == "hidden_latent":
+        init_prompt_embedding = toggle_prompt_embedding_shape(init_prompt_embeddings)[0] # Get single prompt embedding
+        emitter = LatentMutationEmitter(
+                archive=archive,
+                initial_solutions=init_latents.cpu().numpy(),
+                prompt_embedding=init_prompt_embedding,
+                unet=pipe.unet,
+                scheduler=scheduler,
+                batch_size=config.emitter.batch_size,
+                seed=config.algorithm.seed,
+                mutation_type=config.emitter.hidden_latent.mutation_type,
+                guidance_scale=config.generation.guidance_scale,
+                num_inference_steps=config.generation.num_inference_steps,
+                hook_proportion = config.emitter.hidden_latent.hook_proportion,
+                alpha_min=config.emitter.hidden_latent.alpha_min,
+                alpha_max=config.emitter.hidden_latent.alpha_max,
+                svd_k=config.emitter.hidden_latent.svd_k,
+                svd_iters=config.emitter.hidden_latent.svd_iters,
+                svd_fd_eps=config.emitter.hidden_latent.svd_fd_eps,
+                svd_layer=config.emitter.hidden_latent.svd_layer,
+                device=device
+            )
+    
     scheduler = Scheduler(archive, [emitter])
             
     if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":

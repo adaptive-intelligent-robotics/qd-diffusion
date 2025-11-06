@@ -30,11 +30,21 @@ descriptor:
 
 # Emitter Params
 emitter:
-  name: "gaussian"
+  name: "hidden_latent" # hidden_latent
   batch_size: 4
   gaussian:
     latents_sigma: 0.4
     embedding_sigma: 0.2
+  hidden_latent:
+    mutation_type: "svd"
+    alpha_min: -10
+    alpha_max: 10
+    hook_proportion: 0.6
+    svd_k: 10
+    svd_iters: 20
+    svd_fd_eps: 1e-3
+    svd_layer: "mid_block"
+
 
 # Algorithm configuration
 algorithm:
