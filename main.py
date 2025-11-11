@@ -161,6 +161,7 @@ def main(config: DictConfig) -> None:
             solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
             measure_dim=descriptor_dim,
             max_size=config.algorithm.max_pop_size,
+            fitness_threshold=config.algorithm.fitness_threshold,
             k=config.algorithm.dns.k,
             distance_metric=config.algorithm.dns.distance_metric,
             seed=config.algorithm.seed,
@@ -170,6 +171,7 @@ def main(config: DictConfig) -> None:
             solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
             measure_dim=descriptor_dim,
             max_size=config.algorithm.max_pop_size,
+            fitness_threshold=config.algorithm.fitness_threshold,
             k=config.algorithm.dns.k,
             distance_metric=config.algorithm.dns.distance_metric,
             seed=config.algorithm.seed,

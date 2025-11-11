@@ -6,10 +6,10 @@ from functools import partial
 from descriptors import get_descriptor_fun
 
 def fitness_function(generated_images,
-        prompt,
-        clip_model,
-        clip_tokenizer,
-        with_grad=False
+    prompt,
+    clip_model,
+    clip_tokenizer,
+    with_grad=False
 ):
     # Normalize images to match CLIP's expected range
     # CLIP expects images in [0, 1] → then normalized to mean/std
@@ -42,7 +42,7 @@ def fitness_function(generated_images,
     else:        
         return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
     
-def scoring_fn(
+def scoring_function(
     latents,
     prompt_embeddings,
     generate_images_from_latents_fun,
@@ -88,10 +88,10 @@ def get_scoring_function(
         clip_tokenizer=clip_tokenizer,
     )
     
-    scoring_function = partial(scoring_fn,
+    scoring_fn = partial(scoring_function,
         generate_images_from_latents_fun=generate_images_from_latents_fn,
         fitness_fun=fitness_fn,
         descriptor_fun=descriptor_fn,
     )
     
-    return scoring_function, descriptor_dim
+    return scoring_fn, descriptor_dim

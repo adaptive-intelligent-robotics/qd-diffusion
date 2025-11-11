@@ -53,6 +53,7 @@ class DNSArchive(ArchiveBase):
         solution_dim,
         measure_dim,
         max_size,
+        fitness_threshold=-np.inf,
         k=3,
         distance_metric="euclidean",
         qd_score_offset=0.0,
@@ -69,6 +70,7 @@ class DNSArchive(ArchiveBase):
 
         # Archive parameters
         self._max_size = max_size
+        self._fitness_threshold = fitness_threshold
         self._k = k
         if distance_metric not in ["euclidean", "cosine"]:
             raise ValueError(
@@ -216,20 +218,14 @@ class DNSArchive(ArchiveBase):
                 }
             }
 
-    ##
-    ## Core Methods
-    ##
     def add(self, solution, objective, measures, **fields):
         """Adds a batch of solutions to the archive.
 
-        This method implements the core DNS logic:
-        1. Concatenate new solutions with existing elites.
-        2. Calculate the "fitter" matrix.
-        3. Calculate distances between all solutions using scipy.cdist for
-           optimized, low-memory calculation.
-        4. Compute the DNS score (mean dist to k-fittest-neighbors).
-        5. Sort all solutions by this score.
-        6. Keep only the top `max_size` solutions.
+        If the archive is not empty, solutions are first filtered by
+        the `fitness_threshold`. If the archive IS empty, all
+        solutions are added to seed the archive.
+        
+        Remaining solutions are then added, and the DNS culling is applied.
         """
         
         # 1. Validation
@@ -245,101 +241,100 @@ class DNSArchive(ArchiveBase):
         
         batch_size = len(data["objective"])
         
+        # Create the add_info dict for the *original* batch
         add_info = {
             "status": np.zeros(batch_size, dtype=np.int32),
             "value": np.full(batch_size, np.nan, dtype=self.dtypes["objective"]),
         }
+                
+        candidate_mask_in_original_batch = np.ones(batch_size, dtype=bool)
 
-        # 2. Concatenate
+        if not self.empty:
+            candidate_mask_in_original_batch = data["objective"] > self._fitness_threshold
+        
+        num_candidates = np.sum(candidate_mask_in_original_batch)
+        
+        if num_candidates == 0:
+            return add_info
+
+        # Filter all data to only include candidates
+        candidate_data = {
+            name: arr[candidate_mask_in_original_batch] for name, arr in data.items()
+        }
+        
+        # --- NEW THRESHOLDING LOGIC (END) ---
+
+        
+        # 2. Concatenate (now using `candidate_data`)
         cur_elites = self._num_elites
         
         all_sols = np.concatenate(
-            (self._solutions[:cur_elites], data["solution"])
+            (self._solutions[:cur_elites], candidate_data["solution"])
         )
         all_objs = np.concatenate(
-            (self._objectives[:cur_elites], data["objective"])
+            (self._objectives[:cur_elites], candidate_data["objective"])
         )
         all_measures = np.concatenate(
-            (self._measures[:cur_elites], data["measures"])
+            (self._measures[:cur_elites], candidate_data["measures"])
         )
         
         all_extra_fields = {}
         for name in self._extra_fields:
             all_extra_fields[name] = np.concatenate(
-                (self._extra_field_arrays[name][:cur_elites], data[name])
+                (self._extra_field_arrays[name][:cur_elites], candidate_data[name])
             )
         
         num_all = len(all_objs)
-        if num_all == 0:
-            return add_info
 
         # 3. Calculate "fitter" matrix
-        # fitter[i, j] is True if j is fitter than i
         fitter = all_objs[:, None] < all_objs[None, :]
         np.fill_diagonal(fitter, False)
 
-        # 4. Calculate distances (OPTIMIZED VERSION)
-        # Use scipy.spatial.distance.cdist for a fast, C-based
-        # implementation that avoids the (K, K, D) memory bottleneck.
+        # 4. Calculate distances (using cdist)
         if self._distance_metric == "euclidean":
             distance = cdist(all_measures, all_measures, metric="euclidean")
-        
         elif self._distance_metric == "cosine":
-            # cdist's 'cosine' metric is (1 - cosine_similarity).
-            # It's more stable and handles zero-vectors.
             distance = cdist(all_measures, all_measures, metric="cosine")
-            # Clip to avoid floating point errors
             distance = np.clip(distance, 0.0, 2.0)
 
-        # 5. Compute DNS score (mean dist to k-fittest-neighbors)
-        
-        # Mask distances: only consider distances to fitter individuals
+        # 5. Compute DNS score
         distance = np.where(fitter, distance, np.inf)
-
-        # Use partition to find the k smallest distances (fast)
-        # k_nearest_indices shape: (num_all, k)
-        
-        # We need to handle cases where there are fewer than k fitter neighbors
-        # k is self._k
-        k_to_find = min(self._k, num_all - 1) # -1 for self
+        k_to_find = min(self._k, num_all - 1)
         if k_to_find <= 0:
-            # This can happen if num_all is 1
             dns_score = np.full(num_all, np.inf)
         else:
             k_nearest_indices = np.argpartition(
                 distance, k_to_find, axis=1
             )[:, :k_to_find]
-
-            # k_nearest_dists shape: (num_all, k_to_find)
             k_nearest_dists = np.take_along_axis(
                 distance, k_nearest_indices, axis=1
             )
-            
-            # Compute mean, ignoring infs (which mean < k fitter neighbors)
             k_nearest_dists[np.isinf(k_nearest_dists)] = np.nan
-            
-            # dns_score shape: (num_all,)
             dns_score = np.nanmean(k_nearest_dists, axis=1)
-            
-            # If all k neighbors were inf, nanmean returns nan.
-            # This means no fitter neighbors were found. Set score to inf.
             dns_score[np.isnan(dns_score)] = np.inf
         
         # 6. Sort and Truncate
-        
-        # Sort by score descending (higher score is better)
         sorted_indices = np.argsort(dns_score)[::-1]
-        
         keep_indices = sorted_indices[:self._max_size]
         new_num_elites = len(keep_indices)
 
         # 7. Calculate add_info (status)
         
-        new_sol_indices_in_all = np.arange(cur_elites, num_all)
-        survived = np.isin(new_sol_indices_in_all, keep_indices)
+        # Indices of the *candidate* solutions within the `all_` arrays
+        candidate_sol_indices_in_all = np.arange(cur_elites, num_all)
         
-        add_info["status"] = np.where(survived, 2, 0).astype(np.int32)
-        add_info["value"] = data["objective"]
+        # `survived` is a boolean mask of shape (num_candidates,)
+        survived = np.isin(candidate_sol_indices_in_all, keep_indices)
+        
+        # --- MAP SURVIVAL BACK TO ORIGINAL add_info ---
+        
+        # Create status/value arrays just for the candidates
+        candidate_status = np.where(survived, 2, 0).astype(np.int32)
+        candidate_value = np.where(survived, candidate_data["objective"], np.nan)
+
+        # "Scatter" these results back into the original add_info
+        add_info["status"][candidate_mask_in_original_batch] = candidate_status
+        add_info["value"][candidate_mask_in_original_batch] = candidate_value
 
         # 8. Update Archive State
         self._solutions[:new_num_elites] = all_sols[keep_indices]

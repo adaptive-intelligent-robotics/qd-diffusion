@@ -53,6 +53,7 @@ algorithm:
   genotype: "embedding" # "embedding" or "latents"
   max_pop_size: 256
   max_iterations: 200
+  fitness_threshold: 0.25 # -1 if we don't want to threshold
 
   map_elites:
     batch_size: 4
