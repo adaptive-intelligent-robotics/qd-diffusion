@@ -1,13 +1,9 @@
 import torch
 from PIL import Image
-import jax.numpy as jnp
+import math
 import numpy as np
 import os
-import random
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-from tqdm import tqdm
 from image_utils import save_image
 
 def toggle_prompt_embedding_shape(embedding):
@@ -110,7 +106,67 @@ def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, 
         for i, img in enumerate(images):
             save_image(img, os.path.join(itr_image_dir, f"offspring_image_{i}.png"))
     
-    return 
+    return
+
+
+def save_repertoire(repertoire,
+                    itr,
+                    save_dir
+):  
+    torch.save(repertoire.data()["solution"], os.path.join(save_dir, f"{itr}_solutions.pt"))
+    torch.save(repertoire.data()["objective"], os.path.join(save_dir, f"{itr}_fitnesses.pt"))
+    torch.save(repertoire.data()["measures"], os.path.join(save_dir, f"{itr}_descriptors.pt"))
+
+    return
+
+
+def plot_repertoire_images(
+    init_prompt_embedding,
+    init_latent,
+    archive,
+    itr,
+    config,
+    generate_images_from_latents_fun,
+    save_dir,
+):
+    
+    if config.algorithm.genotype == "latents":
+        latents = archive.data()["solution"] 
+        num_sols = latents.shape[0]       
+        prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, num_sols).detach().cpu()
+    
+    elif config.algorithm.genotype == "embedding":
+        sols = archive.data()["solution"]
+        num_sols = sols.shape[0]
+        prompt_embeddings = toggle_prompt_embedding_shape(sols)
+        latents = init_latent.repeat(num_sols, 1, 1, 1)
+    
+    generated_images = generate_images_from_latents_fun(latents, prompt_embeddings)
+    generated_images_np = np.array(generated_images.cpu())
+    generated_images_np = generated_images_np.transpose(0, 2, 3, 1)
+    generated_images_np = (generated_images_np + 1) / 2
+    generated_images_np = np.clip(generated_images_np, 0, 1)
+    
+    # Determine grid size
+    cols = math.ceil(np.sqrt(config.algorithm.max_pop_size))
+    rows = math.ceil(config.algorithm.max_pop_size / cols)
+    
+    # Create the figure
+    fig, axes = plt.subplots(rows, cols, figsize=(cols, rows))  # adjust figsize for visibility
+    
+    # Flatten axes for easy iteration
+    axes = axes.flatten()
+    
+    # Plot each image
+    for i, ax in enumerate(axes):
+        if i < num_sols:
+            ax.imshow(generated_images_np[i])
+            ax.axis("off")
+        else:
+            ax.axis("off")  # hide any unused subplots
+    
+    plt.tight_layout(pad=0.1)
+    plt.savefig(os.path.join(save_dir, f"repertoire_{itr}"))
 
 def generate_images_from_latents(
     latents,
@@ -174,46 +230,6 @@ def generate_images_from_latents(
     return images
 
 
-
-
-def fitness_function(generated_images,
-        prompt,
-        clip_model,
-        clip_tokenizer,
-        with_grad=False
-):
-    # Normalize images to match CLIP's expected range
-    # CLIP expects images in [0, 1] → then normalized to mean/std
-    normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
-    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
-
-    # Tokenize prompt (no gradients needed)
-    text_inputs = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
-
-    # Forward through CLIP (no processor)
-    if with_grad:
-        image_features = clip_model.get_image_features(normalized_images)
-        text_features = clip_model.get_text_features(**text_inputs)
-        
-    else:
-        with torch.no_grad():
-            image_features = clip_model.get_image_features(normalized_images)
-            text_features = clip_model.get_text_features(**text_inputs)
-
-    # Cosine similarity
-    image_features = F.normalize(image_features, dim=-1)
-    text_features = F.normalize(text_features, dim=-1)
-    # logit_scale = clip_model.logit_scale.exp()
-    fitnesses_torch = (image_features @ text_features.T).squeeze() #* logit_scale
-    
-    if with_grad:
-        # If gradients are needed, return the tensor directly
-        return fitnesses_torch
-    
-    else:        
-        return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
-
-
 def save_images(images, iteration="", filenames=None, folder="results"):
     """Saves a batch of images into a results folder."""
     
@@ -249,214 +265,3 @@ def save_images(images, iteration="", filenames=None, folder="results"):
         image.save(os.path.join(folder, filenames[i]))
         
 
-
-def save_sample_images(repertoire,
-        num_inference_steps,
-        guidance_scale,
-        scheduler,
-        unet,
-        vae,
-        n_sample=5,
-        folder="results",
-        init_embedding=None,
-        init_latent=None,
-    ):
-    """
-    Saves non-empty solutions from the repertoire using the provided save_images function.
-    Samples the highest fitness genotype and n_sample other genotypes.
-    
-    Parameters:
-    - repertoire: Dictionary containing 'genotypes', 'descriptors', and 'fitnesses'.
-    - save_images_fn: Function to save images (expects (images, filenames, folder) as input).
-    - prompt: The prompt used for generating the images from genotypes.
-    - n_sample: The number of additional genotypes to sample.
-    - folder: Directory to save the final images.
-    """
-    os.makedirs(folder, exist_ok=True)  # Ensure the directory exists
-
-    valid_genotypes = []
-    fitnesses = []
-    descriptors = []
-    filenames = []
-
-    # Collect valid genotypes, descriptors, fitnesses, and filenames
-    for i, (fitness, descriptor, genotype) in enumerate(zip(repertoire.fitnesses, repertoire.descriptors, repertoire.genotypes)):
-        if fitness == -jnp.inf:  # Skip empty solutions
-            continue
-        valid_genotypes.append(genotype)
-        fitnesses.append(fitness[0])
-        descriptors.append(descriptor)
-        filename = f"fitness_{fitness[0]}_desc_{descriptor[0]:.4f}_{descriptor[1]:.4f}.png"
-        filenames.append(filename)
-
-    # Check if we have enough valid genotypes
-    if len(valid_genotypes) <= n_sample + 1:  # +1 for the best genotype
-        # If not enough, use all valid genotypes
-        combined_genotypes = valid_genotypes
-        combined_filenames = filenames
-    else:
-        # Step 1: Find the genotype with the highest fitness
-        best_fitness_idx = np.argmax(fitnesses)
-        best_genotype = valid_genotypes[best_fitness_idx]
-        best_filename = filenames[best_fitness_idx]
-
-        # Step 2: Sample `n_sample` other valid genotypes (and filenames)
-        # Remove the best genotype from the valid genotypes list to avoid selecting it again
-        remaining_genotypes = valid_genotypes[:best_fitness_idx] + valid_genotypes[best_fitness_idx+1:]
-        remaining_filenames = filenames[:best_fitness_idx] + filenames[best_fitness_idx+1:]
-        
-        # Sample `n_sample` from the remaining genotypes and filenames
-        sampled_genotypes_indices = random.sample(range(len(remaining_genotypes)), n_sample)
-        sampled_genotypes = [remaining_genotypes[i] for i in sampled_genotypes_indices]
-        sampled_filenames = [remaining_filenames[i] for i in sampled_genotypes_indices]
-
-        # Combine the best genotype with the sampled ones
-        combined_genotypes = [best_genotype] + sampled_genotypes
-        combined_filenames = [best_filename] + sampled_filenames
-        
-    num_genotypes = len(combined_genotypes)
-
-    if init_embedding is not None:
-        
-        prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=num_genotypes)  # [2*B, 77, 1024]
-        
-        images = generate_images_from_latents(
-            combined_genotypes,
-            prompt_embeddings,
-            num_inference_steps,
-            guidance_scale,
-            scheduler,
-            unet,
-            vae,
-        )
-    
-    elif init_latent is not None:
-        
-        latents = init_latent.repeat(num_genotypes, axis=0)  # Repeat for batch size
-        combined_genotypes = toggle_prompt_embedding_shape(jnp.array(combined_genotypes))  # [2*B, 77, 1024]
-        
-        images = generate_images_from_latents(
-            latents,
-            combined_genotypes,
-            num_inference_steps,
-            guidance_scale,
-            scheduler,
-            unet,
-            vae,
-        )        
-    
-    # Use the existing save_images function to save the images
-    save_images(images, filenames=combined_filenames, folder=folder)
-
-
-
-# Plot valid thumbnails in descriptor space for a repertoire
-def plot_thumbnails(
-    repertoire,
-    num_inference_steps,
-    guidance_scale,
-    scheduler,
-    unet,
-    vae,
-    batch_size,
-    save_path,
-    init_embedding=None,
-    init_latent=None,
-    save_image=True,
-):
-    """
-    Filters valid genotypes and plots their decoded images in descriptor space.
-
-    Parameters:
-    - repertoire: Dictionary containing 'genotypes', 'descriptors', and 'fitnesses'.
-    - init_embedding: Optional, used for image generation when given.
-    - init_latent: Optional, used for image generation when given.
-    - All other params: Required for image generation and plotting.
-    """
-
-    valid_genotypes = []
-    valid_descriptors = []
-    valid_fitnesses = []
-
-    for fitness, descriptor, genotype in zip(repertoire.fitnesses, repertoire.descriptors, repertoire.genotypes):
-        if fitness == -jnp.inf:
-            continue
-        valid_genotypes.append(genotype)
-        valid_descriptors.append(descriptor)
-        valid_fitnesses.append(fitness)
-
-    if len(valid_genotypes) == 0:
-        print("No valid genotypes to plot.")
-        return
-
-    valid_descriptors = jnp.array(valid_descriptors)
-
-    batch_size = 8  # Adjust as needed based on available memory
-    if init_embedding is not None:
-        all_images = []
-        for i in range(0, len(valid_genotypes), batch_size):
-            genotypes_batch = valid_genotypes[i:i+batch_size]
-            prompt_embeddings = expand_prompt_embedding(init_embedding, batch_size=len(genotypes_batch))
-            images = generate_images_from_latents(
-                genotypes_batch,
-                prompt_embeddings,
-                num_inference_steps,
-                guidance_scale,
-                scheduler,
-                unet,
-                vae,
-            )
-            all_images.extend(images)
-    elif init_latent is not None:
-        all_images = []
-        for i in range(0, len(valid_genotypes), batch_size):
-            genotypes_batch = valid_genotypes[i:i+batch_size]
-            latents_batch = init_latent.repeat(len(genotypes_batch), axis=0)
-            genotypes_batch = toggle_prompt_embedding_shape(jnp.array(genotypes_batch))
-            images = generate_images_from_latents(
-                latents_batch,
-                genotypes_batch,
-                num_inference_steps,
-                guidance_scale,
-                scheduler,
-                unet,
-                vae,
-            )
-            all_images.extend(images)
-
-    else:
-        raise ValueError("Either init_embedding or init_latent must be provided.")
-
-    assert len(valid_descriptors) == len(all_images), "Mismatch between descriptors and images"
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.scatter(valid_descriptors[:, 0], valid_descriptors[:, 1], s=5, c='lightgray', alpha=0.5)
-
-    for (x, y), img in zip(valid_descriptors, all_images):
-        try:
-            if isinstance(img, torch.Tensor):
-                img = img.cpu().numpy().transpose(1, 2, 0)
-                img = (img * 255).clip(0, 255).astype(np.uint8)
-                img = Image.fromarray(img)
-            elif isinstance(img, np.ndarray):
-                img = (img * 255).clip(0, 255).astype(np.uint8)
-                img = Image.fromarray(img)
-
-            thumbnail = img.resize((256, 256))
-            imagebox = OffsetImage(thumbnail, zoom=0.15)
-            ab = AnnotationBbox(imagebox, (x, y), frameon=False, pad=0.1)
-            ax.add_artist(ab)
-        except Exception as e:
-            print(f"Failed to plot image at ({x}, {y}): {e}")
-
-    ax.set_title("Repertoire Descriptor Space with Image Thumbnails")
-    ax.set_xlabel("Descriptor 1")
-    ax.set_ylabel("Descriptor 2")
-    ax.grid(True)
-    plt.tight_layout()
-    if save_image:
-        plt.savefig(save_path+"thumbnail_scatter.png", dpi=300)
-        plt.close()
-        print(f"Saved plot to {save_path}")
-    else:
-        plt.show()

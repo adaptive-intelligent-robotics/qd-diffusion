@@ -330,8 +330,6 @@ class LatentMutationEmitter(EmitterBase):
         self._svd_fd_eps = svd_fd_eps
         self._svd_layer = svd_layer
 
-        print("Emitter: LatentMutationEmitter initialized.")
-
     def _apply_svd_edit(self, x_t, basis, alpha, svd_index):
         svd_index = max(0, min(svd_index, len(basis) - 1))
         vec = basis[svd_index]

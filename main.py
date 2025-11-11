@@ -1,6 +1,4 @@
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 import gc
 import hydra
 import logging
@@ -16,15 +14,14 @@ from diffusers import (
 from emitters.custom_gaussian import CustomGaussianEmitter
 from emitters.latent_emitter import LatentMutationEmitter
 from functools import partial
-from image_utils import (
-    save_image,
-)
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
     toggle_prompt_embedding_shape,
     get_text_embeddings,
     generate_images_from_latents,
+    plot_repertoire_images,
     save_offspring_data,
+    save_repertoire,
 )
 
 from omegaconf import DictConfig, OmegaConf
@@ -78,8 +75,6 @@ def main(config: DictConfig) -> None:
     os.makedirs(_metrics_dir, exist_ok=True)
     os.makedirs(_repertoire_dir, exist_ok=True)
     os.makedirs(_offspring_dir, exist_ok=True)
-    os.makedirs(_images_dir + f"init/", exist_ok=True)
-    os.makedirs(_images_dir + f"final/", exist_ok=True)
     
     metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], np.array([]))
     csv_logger = CSVLogger(
@@ -133,19 +128,12 @@ def main(config: DictConfig) -> None:
         text_encoder=pipe.text_encoder,
         with_grad=False,
     ) # [batch_size * 2, 77, 768]
+    init_prompt_embedding = toggle_prompt_embedding_shape(init_prompt_embeddings)[0] # Get single prompt embedding
     torch.save(init_prompt_embeddings.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embeddings.pt"))
     
-    init_latents = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
-    init_latents = init_latents.repeat(config.emitter.batch_size, 1, 1, 1)
+    init_latent = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
+    init_latents = init_latent.repeat(config.emitter.batch_size, 1, 1, 1)
     init_latents *= scheduler.init_noise_sigma
-    torch.save(init_latents.cpu(), os.path.join(_initial_values_dir, "initial_latents.pt"))
-    
-    init_fitnesses, init_descriptors, init_images = scoring_fn(init_latents, init_prompt_embeddings)
-
-    torch.save(init_fitnesses, os.path.join(_initial_values_dir, "initial_fitnesses.pt"))
-    torch.save(init_descriptors, os.path.join(_initial_values_dir, "initial_descriptors.pt"))
-    for i, img in enumerate(init_images):
-        save_image(img, os.path.join(_images_dir, f"init/initial_image_{i}.png"))
         
     # Set up MAP-Elites
     if config.algorithm.name == "map_elites":
@@ -206,7 +194,6 @@ def main(config: DictConfig) -> None:
                 seed=config.algorithm.seed,
             )
     elif config.emitter.name == "hidden_latent":
-        init_prompt_embedding = toggle_prompt_embedding_shape(init_prompt_embeddings)[0] # Get single prompt embedding
         emitter = LatentMutationEmitter(
                 archive=archive,
                 initial_solutions=init_latents.cpu().numpy(),
@@ -253,6 +240,29 @@ def main(config: DictConfig) -> None:
             logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
             logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
             logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
+            
+            if itr % config.save_repertoire_period == 0:
+                save_repertoire(archive, itr, _repertoire_dir)
+                plot_repertoire_images(
+                    init_prompt_embedding,
+                    init_latent,
+                    archive,
+                    itr,
+                    config,
+                    generate_images_from_latents_fn,
+                    _images_dir
+                    )
+        
+        save_repertoire(archive, "final", _repertoire_dir)
+        plot_repertoire_images(
+            init_prompt_embedding,
+            init_latent,
+            archive,
+            "final",
+            config,
+            generate_images_from_latents_fn,
+            _images_dir
+            )
 
             
 if __name__ == "__main__":

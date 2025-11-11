@@ -1,12 +1,47 @@
-import jax.numpy as jnp
 import numpy as np
+import torch
 
-from typing import Callable, List
+import torch.nn.functional as F
 from functools import partial
-from model_utils import generate_images_from_latents, fitness_function
 from descriptors import get_descriptor_fun
 
+def fitness_function(generated_images,
+        prompt,
+        clip_model,
+        clip_tokenizer,
+        with_grad=False
+):
+    # Normalize images to match CLIP's expected range
+    # CLIP expects images in [0, 1] → then normalized to mean/std
+    normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
+    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
 
+    # Tokenize prompt (no gradients needed)
+    text_inputs = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
+
+    # Forward through CLIP (no processor)
+    if with_grad:
+        image_features = clip_model.get_image_features(normalized_images)
+        text_features = clip_model.get_text_features(**text_inputs)
+        
+    else:
+        with torch.no_grad():
+            image_features = clip_model.get_image_features(normalized_images)
+            text_features = clip_model.get_text_features(**text_inputs)
+
+    # Cosine similarity
+    image_features = F.normalize(image_features, dim=-1)
+    text_features = F.normalize(text_features, dim=-1)
+    # logit_scale = clip_model.logit_scale.exp()
+    fitnesses_torch = (image_features @ text_features.T).squeeze() #* logit_scale
+    
+    if with_grad:
+        # If gradients are needed, return the tensor directly
+        return fitnesses_torch
+    
+    else:        
+        return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
+    
 def scoring_fn(
     latents,
     prompt_embeddings,

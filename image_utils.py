@@ -50,36 +50,3 @@ def load_images_from_folder(folder, max_images=None):
             print(f"Error loading {path}: {e}")
 
     return images
-
-
-def grid_plot_images(test_images):
-    """
-    Plot all images in test_images in a grid using matplotlib.
-    Up to 1000 images, arranged 20 per row.
-    Each image is displayed small to fit the grid nicely.
-    """
-    num_images = len(test_images)
-    if num_images == 0:
-        print("No images to display.")
-        return
-    
-    # Determine grid size
-    cols = 20
-    rows = math.ceil(num_images / cols)
-    
-    # Create the figure
-    fig, axes = plt.subplots(rows, cols, figsize=(20, rows))  # adjust figsize for visibility
-    
-    # Flatten axes for easy iteration
-    axes = axes.flatten()
-    
-    # Plot each image
-    for i, ax in enumerate(axes):
-        if i < num_images:
-            ax.imshow(test_images[i])
-            ax.axis("off")
-        else:
-            ax.axis("off")  # hide any unused subplots
-    
-    plt.tight_layout(pad=0.1)
-    plt.show()
