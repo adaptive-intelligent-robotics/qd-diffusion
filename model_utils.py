@@ -90,6 +90,77 @@ def get_text_embeddings(prompt,
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings]) 
     return text_embeddings.detach()
 
+def get_sdxl_prompt_embeddings(
+    prompt,
+    tokenizer_1,
+    tokenizer_2,
+    text_encoder_1,
+    text_encoder_2,
+    device="cuda"
+):
+    """
+    Manually encodes prompts for SDXL using the dual-encoder architecture.
+    Returns:
+        prompt_embeds: [batch, 77, 2048] (The 'encoder_hidden_states')
+        pooled_prompt_embeds: [batch, 1280] (The 'text_embeds')
+    """
+    
+    # 1. Tokenize the prompts
+    # We assume prompts is a list of strings.
+    # SDXL uses a standard sequence length of 77.
+    
+    # Tokenizer 1 (CLIP ViT-L)
+    text_inputs_1 = tokenizer_1(
+        prompt, 
+        padding="max_length", 
+        max_length=77, 
+        truncation=True, 
+        return_tensors="pt"
+    )
+    
+    # Tokenizer 2 (OpenCLIP ViT-G)
+    text_inputs_2 = tokenizer_2(
+        prompt, 
+        padding="max_length", 
+        max_length=77, 
+        truncation=True, 
+        return_tensors="pt"
+    )
+    
+    input_ids_1 = text_inputs_1.input_ids.to(device)
+    input_ids_2 = text_inputs_2.input_ids.to(device)
+
+    # 2. Get Embeddings from Encoders
+    # We need 'output_hidden_states=True' because SDXL uses the PENULTIMATE layer, 
+    # not the last one.
+    
+    with torch.no_grad():
+        # Encoder 1 output
+        output_1 = text_encoder_1(
+            input_ids_1, 
+            output_hidden_states=True
+        )
+        # Access the penultimate layer (second to last)
+        hidden_states_1 = output_1.hidden_states[-2] 
+
+        # Encoder 2 output
+        output_2 = text_encoder_2(
+            input_ids_2, 
+            output_hidden_states=True
+        )
+        # Access the penultimate layer
+        hidden_states_2 = output_2.hidden_states[-2]
+        
+        # For the Pooled Output (style/vibe), we explicitly need the pooled output 
+        # from Encoder 2 only.
+        pooled_prompt_embeds = output_2.text_embeds
+
+    # 3. Concatenate Hidden States
+    # Encoder 1 (768 dim) + Encoder 2 (1280 dim) = 2048 dim
+    prompt_embeds = torch.cat([hidden_states_1, hidden_states_2], dim=-1)
+
+    return prompt_embeds, pooled_prompt_embeds
+
 def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, offspring_dir, images_dir, model_name):
     
     if config.save_offspring_data:
@@ -139,17 +210,20 @@ def plot_repertoire_images(
     latents = archive.data()["solution"]["latent"]
     num_sols = latents.shape[0]
     prompt_embeddings = archive.data()["solution"]["prompt_embedding"]
-    toggled_prompt_embeddings = toggle_prompt_embedding_shape(prompt_embeddings)
     
     if config.model.name == "sd-1-5":
+        toggled_prompt_embeddings = toggle_prompt_embedding_shape(prompt_embeddings)
         generated_images = generate_images_from_latents_fun(latents, toggled_prompt_embeddings)
         
     elif config.model.name == "sdxl-turbo":
         pooled_prompt_embeddings = archive.data()["solution"]["pooled_prompt_embedding"]
+        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * num_sols).to(latents.device)
+        
         generated_images = generate_images_from_latents_fun(
             latents,
-            toggled_prompt_embeddings,
+            prompt_embeddings,
             pooled_prompt_embeddings,
+            time_ids=time_ids,
         )
 
     generated_images_np = np.array(generated_images.cpu())
@@ -189,21 +263,20 @@ def generate_images_from_latents(
     with_grad=False,
 ):
 
-    # Convert JAX latents to PyTorch tensor
     if isinstance(prompt_embedding, np.ndarray):
-        prompt_embedding = torch.tensor(prompt_embedding, dtype=torch.float32).cuda()
+        prompt_embedding = torch.tensor(prompt_embedding, dtype=unet.dtype).cuda()
     elif isinstance(prompt_embedding, torch.Tensor):
         prompt_embedding = prompt_embedding.float().cuda()
     else:
-        prompt_embedding = torch.tensor(np.array(prompt_embedding), dtype=torch.float32).cuda()
+        prompt_embedding = torch.tensor(np.array(prompt_embedding), dtype=unet.dtype).cuda()
     
     # Ensure prompt_embedding is a PyTorch tensor
     if isinstance(latents, np.ndarray):
-        latents = torch.tensor(latents, dtype=torch.float32).cuda()
+        latents = torch.tensor(latents, dtype=unet.dtype).cuda()
     elif isinstance(latents, torch.Tensor):
         latents = latents.float().cuda()
     else:
-        latents = torch.tensor(np.array(latents), dtype=torch.float32).cuda()
+        latents = torch.tensor(np.array(latents), dtype=unet.dtype).cuda()
             
     # Get text embeddings
     scheduler.set_timesteps(num_inference_steps)
@@ -239,39 +312,77 @@ def generate_images_from_latents(
    
     return images
 
+def generate_images_from_latents_sdxl_turbo(
+    latents,
+    prompt_embedding,         
+    pooled_prompt_embedding,  
+    time_ids,                 
+    num_inference_steps,
+    scheduler,
+    unet,
+    vae,
+    with_grad=False,
+    device="cuda"
+):
+    dtype = unet.dtype  # Match U-Net precision (fp16 or fp32)
 
-def save_images(images, iteration="", filenames=None, folder="results"):
-    """Saves a batch of images into a results folder."""
-    
-    # Ensure the directory exists
-    os.makedirs(folder, exist_ok=True)
-    
-    if filenames is None:
-        filenames = [f"iteration_{iteration}_sample_{i+1}.png" for i in range(len(images))]
-      
-    for i, image_array in enumerate(images):
-        # Convert to NumPy if needed
-        image_array = np.array(image_array.cpu())
+    # --- 1. Helper to standardize tensors ---
+    def to_correct_tensor(x):
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x)
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x)
+        # Ensure correct device and dtype matches the model
+        return x.to(device=device, dtype=dtype)
 
-        # Normalize to [0,255] if needed
-        image_array = (image_array - image_array.min()) / (image_array.max() - image_array.min() + 1e-8)
-        image_array = (image_array * 255).astype(np.uint8)
+    prompt_embedding = to_correct_tensor(prompt_embedding)
+    pooled_prompt_embedding = to_correct_tensor(pooled_prompt_embedding)
+    time_ids = to_correct_tensor(time_ids)
+    latents = to_correct_tensor(latents)
 
-        # Handle shape issues
-        if image_array.shape == (512, 512, 3):  # Already in correct format
-            image = Image.fromarray(image_array, mode="RGB")
-        elif image_array.shape[0] == 3:  # If (3, H, W) -> Convert to (H, W, 3)
-            image_array = np.transpose(image_array, (1, 2, 0))
-            image = Image.fromarray(image_array, mode="RGB")
-        elif image_array.shape[0] == 1:  # If (1, H, W) -> Convert to (H, W)
-            image_array = np.squeeze(image_array, axis=0)
-            image = Image.fromarray(image_array, mode="L")
-        elif image_array.ndim == 2:  # If already (H, W), use grayscale
-            image = Image.fromarray(image_array, mode="L")
-        else:
-            raise ValueError(f"Unexpected shape {image_array.shape} for image {i}")
+    # --- 2. Setup Scheduler ---
+    scheduler.set_timesteps(num_inference_steps)
+    latents = latents * scheduler.init_noise_sigma
 
-        # Save image
-        image.save(os.path.join(folder, filenames[i]))
+    for t in scheduler.timesteps:
         
+        # FIX 1: Use a temporary variable for the input, DO NOT overwrite 'latents'
+        latent_model_input = scheduler.scale_model_input(latents, timestep=t)
 
+        # Prepare SDXL added conditioning
+        added_cond_kwargs = {
+            "text_embeds": pooled_prompt_embedding,
+            "time_ids": time_ids,
+        }
+
+        # --- 3. Predict Noise ---
+        if with_grad:
+            noise_pred = unet(
+                latent_model_input, # Use the scaled input here
+                t, 
+                encoder_hidden_states=prompt_embedding,
+                added_cond_kwargs=added_cond_kwargs
+            ).sample
+        else:
+            with torch.no_grad():
+                noise_pred = unet(
+                    latent_model_input, # Use the scaled input here
+                    t, 
+                    encoder_hidden_states=prompt_embedding,
+                    added_cond_kwargs=added_cond_kwargs
+                ).sample
+
+        # FIX 2: Un-indent this so it runs regardless of with_grad
+        # Use the ORIGINAL 'latents' variable here
+        latents = scheduler.step(noise_pred, t, latents).prev_sample
+
+    # --- 4. Decode ---
+    scaling_factor = 0.13025 
+    
+    if with_grad:
+        images = vae.decode(latents / scaling_factor).sample
+    else:
+        with torch.no_grad():
+            images = vae.decode(latents / scaling_factor).sample
+
+    return images

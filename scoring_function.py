@@ -47,11 +47,23 @@ def scoring_function(
     generate_images_from_latents_fun,
     fitness_fun,
     descriptor_fun,
+    model_name,
 ):
-    toggled_prompt_embeddings = toggle_prompt_embedding_shape(solutions["prompt_embedding"])
+    
+    if model_name == "sd-1-5":
+        toggled_prompt_embeddings = toggle_prompt_embedding_shape(solutions["prompt_embedding"])
+        generated_images = generate_images_from_latents_fun(solutions["latent"], toggled_prompt_embeddings)
+        
+    elif model_name == "sdxl-turbo":
+        batch_size = solutions["latent"].shape[0]
+        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * batch_size).to(solutions["latent"].device)
+        generated_images = generate_images_from_latents_fun(
+            solutions["latent"],
+            solutions["prompt_embedding"],
+            solutions["pooled_prompt_embedding"],
+            time_ids=time_ids,
+        )
 
-    # Generate images
-    generated_images = generate_images_from_latents_fun(solutions["latent"], toggled_prompt_embeddings)
     generated_images_np = np.array(generated_images.cpu())
 
     # Find fitnesses  
@@ -90,14 +102,11 @@ def get_scoring_function(
         clip_tokenizer=clip_tokenizer,
     )
     
-    if model_name == "sdxl-turbo":
-        # For SDXL, we need gradients for the fitness function
-        pass # TO DO
-    elif model_name == "sd-1-5":
-        scoring_fn = partial(scoring_function,
-            generate_images_from_latents_fun=generate_images_from_latents_fn,
-            fitness_fun=fitness_fn,
-            descriptor_fun=descriptor_fn,
-        )
+    scoring_fn = partial(scoring_function,
+        generate_images_from_latents_fun=generate_images_from_latents_fn,
+        fitness_fun=fitness_fn,
+        descriptor_fun=descriptor_fn,
+        model_name=model_name,
+    )
     
     return scoring_fn, descriptor_dim

@@ -20,7 +20,9 @@ from image_utils import save_image
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
     get_text_embeddings,
+    get_sdxl_prompt_embeddings,
     generate_images_from_latents,
+    generate_images_from_latents_sdxl_turbo,
     plot_repertoire_images,
     save_offspring_data,
     save_repertoire,
@@ -136,16 +138,55 @@ def main(config: DictConfig) -> None:
         gc.collect()
             
     elif config.model.name == "sdxl-turbo":
-        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float32)
+        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", dtype=torch.float32)
         pipe.to("cuda")
         solution_schema = {
             "latent": (4, 64, 64),
-            "prompt_embedding": (2, 77, 1024),
-            "pooled_prompt_embedding": (2, 1024),
+            "prompt_embedding": (77, 2048),
+            "pooled_prompt_embedding": (1280,),
         }
     
+        generate_images_from_latents_fn = partial(generate_images_from_latents_sdxl_turbo,
+            num_inference_steps=1,
+            scheduler=pipe.scheduler,
+            unet=pipe.unet,
+            vae=pipe.vae,
+        )
+        
+        init_prompt_embedding, init_pooled_prompt_embedding = get_sdxl_prompt_embeddings(
+            prompt=config.generation.prompt,
+            tokenizer_1=pipe.tokenizer,          
+            tokenizer_2=pipe.tokenizer_2,
+            text_encoder_1=pipe.text_encoder,    
+            text_encoder_2=pipe.text_encoder_2,
+            device="cuda"
+        )
+
+        init_image = generate_images_from_latents_fn(
+            latents=init_latent,
+            prompt_embedding=init_prompt_embedding,
+            pooled_prompt_embedding=init_pooled_prompt_embedding,
+            time_ids=[1024, 1024, 0, 0, 512, 512],
+        )
+        
+        # Save seed image, latent and prompt embedding
+        torch.save(init_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embedding.pt"))
+        torch.save(init_latent.cpu(), os.path.join(_initial_values_dir, "initial_latent.pt"))
+        torch.save(init_pooled_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_pooled_prompt_embedding.pt"))
+        save_image(init_image[0], os.path.join(_initial_values_dir, "initial_image.png"))
+        
+        # Create initial solution dict
+        initial_solution = {
+            "latent": init_latent.cpu(),
+            "prompt_embedding": init_prompt_embedding.cpu(),
+            "pooled_prompt_embedding": init_pooled_prompt_embedding.cpu(),
+        }
+        
+        del init_image, init_latent, init_prompt_embedding, init_pooled_prompt_embedding    
+        gc.collect()
+        
     # Load CLIP model for fitness calculations
-    clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", torch_dtype=torch.float32, cache_dir="/var/tmp/hf")
+    clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", dtype=torch.float32, cache_dir="/var/tmp/hf")
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to("cuda") # type: ignore
     
     # Set up scoring function
