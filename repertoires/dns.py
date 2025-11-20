@@ -10,6 +10,397 @@ from ribs.archives._utils import (
 ) 
 from scipy.spatial.distance import cdist
 
+
+class DNSDictArchive(ArchiveBase):
+    """
+    A DNS Archive that supports dictionary-based solutions (e.g. separate 
+    tensors for latents, embeddings, and pooled_embeddings).
+    """
+
+    def __init__(
+        self,
+        *,
+        # solution_dim can now be a dict, e.g. {'latents': (4,64,64), 'embeds': (77,768)}
+        solution_dim, 
+        measure_dim,
+        max_size,
+        fitness_threshold=-np.inf,
+        k=3,
+        distance_metric="euclidean",
+        qd_score_offset=0.0,
+        seed=None,
+        dtype=np.float64,
+        extra_fields=None,
+    ):
+        # Ribs base expects a tuple/int for solution_dim. 
+        # We pass a dummy empty tuple to super() to bypass base checks, 
+        # and handle the schema ourselves.
+        super().__init__(
+            solution_dim=(), 
+            objective_dim=(),
+            measure_dim=measure_dim,
+        )
+
+        self._max_size = max_size
+        self._fitness_threshold = fitness_threshold
+        self._k = k
+        self._distance_metric = distance_metric
+        self._rng = np.random.default_rng(seed)
+        self._qd_score_offset = qd_score_offset
+        self._dtypes = parse_dtype(dtype)
+        self._extra_fields = extra_fields or {}
+        self._field_list = ["solution", "objective", "measures"] + list(self._extra_fields.keys())
+        
+        # --- SOLUTION SCHEMA HANDLING ---
+        if isinstance(solution_dim, dict):
+            self._solution_schema = solution_dim
+            self._is_structured = True
+        else:
+            # Fallback for standard usage
+            shape = (solution_dim,) if isinstance(solution_dim, int) else solution_dim
+            self._solution_schema = {"data": shape}
+            self._is_structured = False
+
+        # --- ALLOCATE STORAGE ---
+        # self._solutions is now a DICT of arrays
+        self._solutions = {}
+        for key, shape in self._solution_schema.items():
+            self._solutions[key] = np.empty(
+                (self._max_size, *shape),
+                dtype=self._dtypes["solution"]
+            )
+
+        self._objectives = np.full(
+            (self._max_size,), -np.inf, dtype=self._dtypes["objective"]
+        )
+        self._measures = np.empty(
+            (self._max_size, self.measure_dim), dtype=self._dtypes["measures"]
+        )
+
+        self._extra_field_arrays = {}
+        for name, (shape, dt) in self._extra_fields.items():
+            self._extra_field_arrays[name] = np.empty(
+                (self._max_size, *shape), dtype=dt
+            )
+            
+        self._num_elites = 0
+        self._stats_reset()
+
+    # ... (Keep _stats_reset and properties same as before) ...
+    
+    def _stats_reset(self):
+        """Resets the archive stats."""
+        self._best_elite = None
+        self._stats = ArchiveStats(
+            num_elites=0,
+            coverage=0.0,
+            qd_score=0.0,
+            norm_qd_score=0.0,
+            obj_max=None,
+            obj_mean=None,
+        )
+
+    def _stats_update(self):
+        """Updates statistics after an add operation."""
+        if self.empty:
+            self._stats_reset()
+            return
+
+        occupied_obj = self._objectives[:self._num_elites]
+        objective_sum = np.sum(occupied_obj)
+        
+        best_idx = np.argmax(occupied_obj)
+        
+        # Construct best elite dict
+        best_sol = {k: arr[best_idx] for k, arr in self._solutions.items()}
+        if not self._is_structured:
+             best_sol = best_sol["data"]
+
+        self._best_elite = {
+            "solution": best_sol,
+            "objective": self._objectives[best_idx],
+            "measures": self._measures[best_idx],
+        }
+        
+        new_obj_max = self._objectives[best_idx]
+        new_qd_score = (objective_sum - self._qd_score_offset * self._num_elites)
+        
+        self._stats = ArchiveStats(
+            num_elites=self._num_elites,
+            coverage=float(self._num_elites) / self._max_size,
+            qd_score=new_qd_score,
+            norm_qd_score=new_qd_score / self._max_size,
+            obj_max=new_obj_max,
+            obj_mean=objective_sum / self._num_elites,
+        )
+    
+    def add(self, solution, objective, measures, **fields):
+        """
+        Args:
+            solution: A DICT of batches if using structured schema, 
+                      or a single numpy array if using standard mode.
+        """
+        
+        # 1. Normalize Solution Input
+        if not isinstance(solution, dict):
+            if self._is_structured:
+                raise ValueError("Archive expects a dictionary for 'solution'")
+            solution_batch = {"data": solution}
+        else:
+            if not self._is_structured:
+                raise ValueError("Archive created with flat dim, but got dict solution")
+            solution_batch = solution
+
+        batch_size = len(objective)
+        
+        # Custom validation (skipping ribs validate_batch for solution part)
+        if len(measures) != batch_size:
+            raise ValueError("Shape mismatch between objective and measures")
+
+        # Add info tracking
+        add_info = {
+            "status": np.zeros(batch_size, dtype=np.int32),
+            "value": np.full(batch_size, np.nan, dtype=self._dtypes["objective"]),
+        }
+        
+        # 2. Thresholding
+        candidate_mask = np.ones(batch_size, dtype=bool)
+        if not self.empty:
+            candidate_mask = objective > self._fitness_threshold
+        
+        if np.sum(candidate_mask) == 0:
+            return add_info
+
+        # Filter inputs
+        cand_obj = objective[candidate_mask]
+        cand_meas = measures[candidate_mask]
+        cand_sols = {k: v[candidate_mask] for k, v in solution_batch.items()}
+        cand_extras = {k: v[candidate_mask] for k, v in fields.items()}
+
+        # 3. Concatenate
+        cur_elites = self._num_elites
+        
+        # Concatenate Solutions (Iterating over the dict keys)
+        all_sols = {}
+        for k in self._solutions:
+            all_sols[k] = np.concatenate(
+                (self._solutions[k][:cur_elites], cand_sols[k])
+            )
+
+        all_objs = np.concatenate((self._objectives[:cur_elites], cand_obj))
+        all_measures = np.concatenate((self._measures[:cur_elites], cand_meas))
+        
+        all_extras = {}
+        for k in self._extra_fields:
+            all_extras[k] = np.concatenate(
+                (self._extra_field_arrays[k][:cur_elites], cand_extras[k])
+            )
+
+        num_all = len(all_objs)
+
+        # 4. Logic / DNS Calculation (Same as before)
+        fitter = all_objs[:, None] < all_objs[None, :]
+        np.fill_diagonal(fitter, False)
+
+        if self._distance_metric == "euclidean":
+            distance = cdist(all_measures, all_measures, metric="euclidean")
+        elif self._distance_metric == "cosine":
+            distance = cdist(all_measures, all_measures, metric="cosine")
+            distance = np.clip(distance, 0.0, 2.0)
+
+        distance = np.where(fitter, distance, np.inf)
+        k_to_find = min(self._k, num_all - 1)
+        
+        if k_to_find <= 0:
+            dns_score = np.full(num_all, np.inf)
+        else:
+            k_nearest_indices = np.argpartition(distance, k_to_find, axis=1)[:, :k_to_find]
+            k_nearest_dists = np.take_along_axis(distance, k_nearest_indices, axis=1)
+            k_nearest_dists[np.isinf(k_nearest_dists)] = np.nan
+            dns_score = np.nanmean(k_nearest_dists, axis=1)
+            dns_score[np.isnan(dns_score)] = np.inf
+        
+        # 5. Sort and Truncate
+        sorted_indices = np.argsort(dns_score)[::-1]
+        keep_indices = sorted_indices[:self._max_size]
+        new_num_elites = len(keep_indices)
+
+        # 6. Update Status info
+        candidate_indices_in_all = np.arange(cur_elites, num_all)
+        survived = np.isin(candidate_indices_in_all, keep_indices)
+        
+        add_info["status"][candidate_mask] = np.where(survived, 2, 0)
+        add_info["value"][candidate_mask] = np.where(survived, cand_obj, np.nan)
+
+        # 7. Update Archive Storage
+        # Update every tensor in the solution dict
+        for k in self._solutions:
+            self._solutions[k][:new_num_elites] = all_sols[k][keep_indices]
+
+        self._objectives[:new_num_elites] = all_objs[keep_indices]
+        self._measures[:new_num_elites] = all_measures[keep_indices]
+        
+        for k in self._extra_fields:
+            self._extra_field_arrays[k][:new_num_elites] = all_extras[k][keep_indices]
+
+        self._num_elites = new_num_elites
+        self._objectives[self._num_elites:] = -np.inf
+        
+        self._stats_update()
+        
+        return add_info
+
+    def sample_elites(self, n):
+        if self.empty:
+            raise IndexError("No elites to sample.")
+            
+        indices = self._rng.integers(self._num_elites, size=n)
+        
+        # Retrieve structured solution
+        sampled_sol = {
+            k: self._solutions[k][indices] for k in self._solutions
+        }
+        
+        # If user initialized with simple tuple/int, return just the array
+        if not self._is_structured:
+            sampled_sol = sampled_sol["data"]
+
+        return {
+            "solution": sampled_sol,
+            "objective": self._objectives[indices],
+            "measures": self._measures[indices],
+            **{k: arr[indices] for k, arr in self._extra_field_arrays.items()}
+        }
+        
+    ##
+    ## Properties
+    ##
+
+    @property
+    def stats(self):
+        """ArchiveStats: Statistics about the archive (coverage, qd_score, etc)."""
+        return self._stats
+
+    @property
+    def best_elite(self):
+        """dict: The best elite found so far."""
+        return self._best_elite
+
+    @property
+    def dtypes(self):
+        """dict: Mapping from field name to dtype."""
+        return self._dtypes
+
+    @property
+    def field_list(self):
+        """list: List of data fields stored in the archive."""
+        return self._field_list
+    
+    @property
+    def empty(self):
+        return self._num_elites == 0
+    
+    @property
+    def solution_dim(self):
+        """Returns the solution schema (dict) instead of the raw tuple."""
+        return self._solution_schema
+
+    def data(self, fields=None, return_type="dict"):
+        """Returns data for all elites in the archive."""
+        
+        # 1. Handle Empty Archive
+        if self.empty:
+            # [FIX] Create a Dict of empty arrays for the solution
+            empty_solutions = {
+                k: np.empty((0, *shape), dtype=self.dtypes["solution"])
+                for k, shape in self.solution_dim.items()
+            }
+            
+            all_data = {
+                "solution": empty_solutions,
+                "objective": np.empty(0, dtype=self.dtypes["objective"]),
+                "measures": np.empty((0, self.measure_dim), dtype=self.dtypes["measures"]),
+                **{
+                    name: np.empty((0, *shape), dtype=dt)
+                    for name, (shape, dt) in self._extra_fields.items()
+                }
+            }
+        else:
+            # 2. Handle Populated Archive
+            # [FIX] Iterate over keys and slice the individual arrays
+            sliced_solutions = {
+                k: arr[:self._num_elites].copy()
+                for k, arr in self._solutions.items()
+            }
+
+            all_data = {
+                "solution": sliced_solutions,
+                "objective": self._objectives[:self._num_elites].copy(),
+                "measures": self._measures[:self._num_elites].copy(),
+                **{
+                    name: arr[:self._num_elites].copy()
+                    for name, arr in self._extra_field_arrays.items()
+                }
+            }
+
+        # 3. Filter Fields
+        if fields is None:
+            fields = self.field_list
+        elif isinstance(fields, str):
+            return all_data[fields]
+            
+        # 4. Return Types
+        if return_type == "dict":
+            return {f: all_data[f] for f in fields}
+        
+        if return_type == "dict_array":
+            # Used by _stats_update to get single elite dicts
+            # This is slightly more complex now that solution is a dict
+            results = []
+            for i in range(self._num_elites):
+                elite = {}
+                for field in fields:
+                    if field == "solution":
+                        # Extract the i-th item from every key in the solution dict
+                        elite["solution"] = {
+                            k: all_data["solution"][k][i] 
+                            for k in all_data["solution"]
+                        }
+                    else:
+                        elite[field] = all_data[field][i]
+                results.append(elite)
+            return results
+
+        if return_type == "tuple":
+            return tuple(all_data[f] for f in fields)
+        
+        if return_type == "pandas":
+            # Pandas support for nested dicts is tricky, but basic flattening:
+            try:
+                import pandas as pd
+            except ImportError as e:
+                raise ImportError("pandas is required for return_type='pandas'") from e
+            
+            data_dict = {}
+            for f in fields:
+                val = all_data[f]
+                if f == "solution":
+                    # Flatten solution dict: solution_latent, solution_prompt...
+                    for sol_k, sol_v in val.items():
+                        # For simplicity, we treat high-dim tensors as object columns
+                        # or flatten strictly 1D data.
+                        data_dict[f"solution_{sol_k}"] = list(sol_v)
+                elif f == "objective":
+                    data_dict["objective"] = val
+                elif isinstance(val, np.ndarray) and val.ndim == 2:
+                    for i in range(val.shape[1]):
+                        data_dict[f"{f}_{i}"] = val[:, i]
+                else:
+                    data_dict[f] = list(val)
+            return pd.DataFrame(data_dict)
+            
+        raise ValueError(f"Unknown return_type: {return_type}")
+    
 class DNSArchive(ArchiveBase):
     """An unstructured archive that stores a fixed-size buffer of elites.
 

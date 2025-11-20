@@ -1,9 +1,9 @@
 import numpy as np
 import torch
-
 import torch.nn.functional as F
 from functools import partial
 from descriptors import get_descriptor_fun
+from model_utils import toggle_prompt_embedding_shape
 
 def fitness_function(generated_images,
     prompt,
@@ -43,14 +43,15 @@ def fitness_function(generated_images,
         return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
     
 def scoring_function(
-    latents,
-    prompt_embeddings,
+    solutions,
     generate_images_from_latents_fun,
     fitness_fun,
     descriptor_fun,
 ):
+    toggled_prompt_embeddings = toggle_prompt_embedding_shape(solutions["prompt_embedding"])
+
     # Generate images
-    generated_images = generate_images_from_latents_fun(latents, prompt_embeddings)
+    generated_images = generate_images_from_latents_fun(solutions["latent"], toggled_prompt_embeddings)
     generated_images_np = np.array(generated_images.cpu())
 
     # Find fitnesses  
@@ -71,6 +72,7 @@ def get_scoring_function(
     clip_tokenizer,
     generate_images_from_latents_fn,
     generator,
+    model_name, 
     save_dir,
 ):
     
@@ -88,10 +90,14 @@ def get_scoring_function(
         clip_tokenizer=clip_tokenizer,
     )
     
-    scoring_fn = partial(scoring_function,
-        generate_images_from_latents_fun=generate_images_from_latents_fn,
-        fitness_fun=fitness_fn,
-        descriptor_fun=descriptor_fn,
-    )
+    if model_name == "sdxl-turbo":
+        # For SDXL, we need gradients for the fitness function
+        pass # TO DO
+    elif model_name == "sd-1-5":
+        scoring_fn = partial(scoring_function,
+            generate_images_from_latents_fun=generate_images_from_latents_fn,
+            fitness_fun=fitness_fn,
+            descriptor_fun=descriptor_fn,
+        )
     
     return scoring_fn, descriptor_dim

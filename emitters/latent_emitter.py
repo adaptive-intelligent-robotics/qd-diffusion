@@ -3,7 +3,11 @@ import torch
 from diffusers import DDIMScheduler
 from diffusers.models import UNet2DConditionModel
 from ribs.emitters._emitter_base import EmitterBase
-from typing import Tuple
+from typing import Tuple, Dict, Optional
+
+# =============================================================================
+# 1. HELPER FUNCTIONS (Gradient/Hook Logic)
+# =============================================================================
 
 def _phi_hidden(unet: UNet2DConditionModel, x_t, t, prompt_embedding, guidance_scale, *, 
                 layer, scheduler):
@@ -11,17 +15,17 @@ def _phi_hidden(unet: UNet2DConditionModel, x_t, t, prompt_embedding, guidance_s
     Capture a hidden activation from diffusers UNet via a forward hook.
     Returns the CONDITIONAL half (for CFG) flattened to 1D.
     """
-    assert scheduler is not None, "Pass the scheduler so we can call scale_model_input once."
-
+    assert scheduler is not None
+    
     # CFG duplication
     uncond, cond = prompt_embedding[0:1], prompt_embedding[1:2]
     x_in = torch.cat([x_t, x_t], dim=0)
     t_in = torch.cat([t, t], dim=0)
     h_in = torch.cat([uncond, cond], dim=0)
 
-    x_in = scheduler.scale_model_input(x_in, t[0]) # Use scalar t
+    x_in = scheduler.scale_model_input(x_in, t[0])
 
-    # pick target module
+    # Pick target module
     if isinstance(layer, str) and layer == "mid_block":
         target = unet.mid_block
     else:
@@ -50,6 +54,7 @@ def _phi_hidden(unet: UNet2DConditionModel, x_t, t, prompt_embedding, guidance_s
 
 @torch.no_grad()
 def roll_to_hook(x_T, prompt_embedding, *, unet, scheduler, guidance_scale, num_steps, hook_idx, device="cuda"):
+    """Rolls the diffusion process forward from T to the hook timestep."""
     x  = x_T.to(device).clone()
     prompt_embedding = prompt_embedding.to(device)
     scheduler.set_timesteps(num_steps)
@@ -85,8 +90,9 @@ def compute_svd_basis_at_hook(
     seed: int | None = None,
     layer="mid_block",
 ):
+    """Computes the top-k Singular Vectors of the Jacobian at the hook point."""
     xT = x_t.detach().to(device)
-    t  = torch.tensor(t_scalar, device=device).expand(1) # _phi_hidden needs a tensor
+    t  = torch.tensor(t_scalar, device=device).expand(1)
     prompt_embedding = prompt_embedding.to(device)
 
     with torch.no_grad():
@@ -152,18 +158,14 @@ def invert_to_start(
         hook_idx,
         device="cuda"
     ):
-    
-    # We must reset timesteps to the full range for the scheduler
+    """Inverts the diffusion process from the hook point back to t=0 (Noise)."""
     scheduler.set_timesteps(len(timesteps), device=device)
-    
     latents  = start_latents.clone()
     
-    # Get the timesteps to reverse over
     timesteps_to_reverse = reversed(timesteps[:hook_idx + 1])
     num_reverse_steps = len(timesteps_to_reverse)
     
     for i, t in enumerate(timesteps_to_reverse):
-    
         if i >= num_reverse_steps - 1: continue
         
         latent_model_input = torch.cat([latents] * 2) 
@@ -173,11 +175,9 @@ def invert_to_start(
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
         
-        # This is the tricky part of DDIM inversion
         current_t = t
         next_t = timesteps_to_reverse[i + 1] if (i + 1) < num_reverse_steps else torch.tensor(-1)
-        if next_t.item() == -1: # End of loop
-             break
+        if next_t.item() == -1: break
 
         alpha_t = scheduler.alphas_cumprod[current_t]
         alpha_t_next = scheduler.alphas_cumprod[next_t]
@@ -187,68 +187,29 @@ def invert_to_start(
     return latents
 
 
+# =============================================================================
+# 2. THE EMITTER CLASS
+# =============================================================================
 
-
-class LatentMutationEmitter(EmitterBase):
+class SDLatentEmitter(EmitterBase):
     """
-    Emits solutions by mutating elites from the archive at an intermediate
-    diffusion timestep (t).
+    Emits solutions for SD 1.5 pipelines.
+    Expects keys: 'latent' and 'prompt_embedding'.
     
-    This emitter uses a "1-Parent-Many-Offspring" strategy to
-    amortize the high cost of computing the SVD basis. When `ask()` is
-    called, it samples ONE parent from the archive, computes its SVD
-    basis, and then generates the *entire batch* of offspring from it.
-    
-    If the archive is empty, it uses `x0` as the parent. If 
-    `initial_solutions` are provided, the first call to `ask()` will
-    return them to seed the archive.
-    
-    Solutions are stored in the archive in their native 4D/5D shape,
-    e.g., (1, 4, 64, 64).
-
-    Args:
-        archive (ribs.archives.ArchiveBase): Archive of solutions.
-        x0 (torch.Tensor or np.ndarray): The initial solution (e.g.,
-            shape (1, 4, 64, 64)) to use as a parent when the
-            archive is empty. Must be provided if `initial_solutions` is None.
-        initial_solutions (np.ndarray): An array of solutions
-            (e.g., shape (batch_size, 1, 4, 64, 64)) to be returned
-            the first time `ask()` is called when the archive is empty.
-            If `None`, `x0` will be used to generate solutions.
-        bounds (None or array-like): Bounds of the solution space.
-            (Not typically used for latents, but part of the API).
-        batch_size (int): Number of solutions to return in `ask()`.
-        seed (int): Value to seed the random number generator.
-        
-        prompt_embedding (torch.Tensor): The prompt embedding for the model.
-        unet (UNet2DConditionModel): The diffusion model's UNet.
-        scheduler (DDIMScheduler): The diffusion scheduler.
-        
-        mutation_type (str): Type of mutation ("svd" or "noise").
-        guidance_scale (float): Classifier-free guidance scale.
-        num_inference_steps (int): Total diffusion steps.
-        hook_proportion (float): Pct of steps to roll forward (0.0-1.0).
-        alpha_min (float): Minimum mutation strength.
-        alpha_max (float): Maximum mutation strength.
-        svd_k (int): Number of singular vectors to compute.
-        svd_iters (int): Power iterations for SVD.
-        svd_fd_eps (float): Epsilon for finite-difference in JVP.
-        svd_layer (str or Tuple): The UNet layer to hook.
-        device (str): PyTorch device.
+    Features:
+    - Uses `initial_solution` as the seed for Generation 0.
+    - In Gen 0, the first offspring is exact clone (alpha=0) to preserve original.
+    - Casts inputs to UNet precision (Float32/16) for speed and safety.
     """
     def __init__(
         self,
         archive,
         *,
-        # --- pyribs Standard ---
-        x0: torch.Tensor | np.ndarray = None,
-        initial_solutions: np.ndarray = None,
-        bounds: np.ndarray = None,
+        initial_solution: Dict[str, np.ndarray], # Mandatory Seed (Size 1)
         batch_size: int,
         seed: int = None,
 
         # --- Diffusion Model Components ---
-        prompt_embedding: torch.Tensor,
         unet: UNet2DConditionModel,
         scheduler: DDIMScheduler,
         
@@ -268,55 +229,32 @@ class LatentMutationEmitter(EmitterBase):
         
         # --- Technical ---
         device: str = "cuda",
+        bounds = None,
     ):
         
-        # 1. Initialize EmitterBase
-        self._solution_shape = archive.solution_dim
+        self._solution_schema = archive.solution_dim 
+        # Pass empty tuple for solution_dim to bypass EmitterBase checks
         super().__init__(
             archive=archive,
-            solution_dim=self._solution_shape,
+            solution_dim=(), 
             bounds=bounds,
         )
         
-        # 2. Handle x0 and initial_solutions (like GaussianEmitter)
-        if x0 is None and initial_solutions is None:
-            raise ValueError("Either x0 or initial_solutions must be provided.")
-        if x0 is not None and initial_solutions is not None:
-            raise ValueError("x0 and initial_solutions cannot both be provided.")
+        # --- Handle Seed ---
+        if initial_solution is None:
+            raise ValueError("initial_solution must be provided as the seed.")
 
-        self._x0_numpy = None
-        if x0 is not None:
-            if isinstance(x0, torch.Tensor):
-                self._x0_numpy = x0.cpu().numpy()
-            else:
-                self._x0_numpy = np.array(x0)
-            
-            if self._x0_numpy.shape != self._solution_shape:
-                raise ValueError(
-                    f"x0 shape ({self._x0_numpy.shape}) must match "
-                    f"archive.solution_dim ({self._solution_shape})"
-                )
+        # Store seed. We expect it to be size 1, but we handle normalization later.
+        self._seed_sol = initial_solution
 
-        self._initial_solutions = initial_solutions
-        if self._initial_solutions is not None:
-            # Check batch shape
-            if self._initial_solutions.shape[1:] != self._solution_shape:
-                 raise ValueError(
-                    f"initial_solutions shape ({self._initial_solutions.shape}) must "
-                    f"match (batch_size, *archive.solution_dim) "
-                    f"(i.e., (N, {self._solution_shape}))"
-                )
-
-        # 3. Store components and hyperparams
+        # --- Standard Setup ---
         self._rng = np.random.default_rng(seed)
         self._torch_rng = torch.Generator(device=device).manual_seed(seed if seed is not None else 0)
-        
         self.batch_size = batch_size
         self._device = device
         
         self._unet = unet
         self._scheduler = scheduler
-        self._prompt_embedding = prompt_embedding.to(device)
         
         self._mutation_type = mutation_type
         self._guidance_scale = guidance_scale
@@ -342,43 +280,53 @@ class LatentMutationEmitter(EmitterBase):
 
     def ask(self):
         """
-        Generates `batch_size` solutions by mutating ONE parent
-        from the archive.
-        
-        Returns a (batch_size, *solution_shape) NumPy array.
+        Generates `batch_size` solutions.
+        - If Iteration 0: Mutates the Seed. First child is exact copy.
+        - If Iteration 1+: Mutates an Elite from Archive.
         """
         
-        # 1. Seeding: Return initial solutions on first call if provided
-        if self.archive.empty and self._initial_solutions is not None:
-            solutions = self._initial_solutions
-            self._initial_solutions = None  # Only return them once
-            return solutions
+        # 1. Select Parent
+        is_first_generation = False
 
-        # 2. Sample ONE parent from the archive
         if self.archive.empty:
-            # Use x0 as the parent (e.g., shape (4, 64, 64))
-            parent_xT_numpy = self._x0_numpy
+            is_first_generation = True
+            # Use Seed. Collapse batch dim (1, ...) -> (...)
+            parent_sol = {
+                k: (v[0] if v.shape[0] == 1 else v) 
+                for k, v in self._seed_sol.items()
+            }
         else:
-            # Sample 1 elite, get its 'solution' field, select first item
-            # Shape is (4, 64, 64)
-            parent_xT_numpy = self.archive.sample_elites(1)["solution"][0]
+            # Sample from Archive. Returns dict of batches (1, ...).
+            sampled = self.archive.sample_elites(1)["solution"]
+            parent_sol = {k: v[0] for k, v in sampled.items()}
+
+        # 2. Extract Data & Cast to UNet Precision
+        parent_latents_np = parent_sol["latent"] 
+        parent_prompt_np = parent_sol["prompt_embedding"]
         
-        # 3. Convert 3D parent -> 3D tensor
-        parent_xT = torch.tensor(
-            parent_xT_numpy, 
+        # [SPEED FIX] Cast to self._unet.dtype (e.g. float32/16)
+        current_prompt_embed = torch.tensor(
+            parent_prompt_np, 
             device=self._device, 
-            dtype=torch.float32
+            dtype=self._unet.dtype
+        )
+       
+        parent_xT = torch.tensor(
+            parent_latents_np, 
+            device=self._device, 
+            dtype=self._unet.dtype
         )
         
-        
-        if parent_xT.dim() == 3:
-            parent_xT = parent_xT.unsqueeze(0)
-        
-        # 4. Roll this parent to the hook layer
+        # Ensure 4D (1, C, H, W)
+        if parent_xT.dim() == 3: 
+            parent_xT = parent_xT.unsqueeze(0) 
+
+        # 3. Roll to Hook Point
         hook_idx = int(self._hook_proportion * self._num_inference_steps)
+        
         x_t, t_scalar, idx, timesteps = roll_to_hook(
             x_T=parent_xT,
-            prompt_embedding=self._prompt_embedding,
+            prompt_embedding=current_prompt_embed, 
             unet=self._unet,
             scheduler=self._scheduler,
             guidance_scale=self._guidance_scale,
@@ -387,8 +335,7 @@ class LatentMutationEmitter(EmitterBase):
             device=self._device,
         )
 
-        # 5. Compute the mutation basis (SVD or Noise)
-        # x_t is (1, 4, 64, 64), so basis_vecs are (1, 4, 64, 64)
+        # 4. Compute SVD Basis (if needed)
         basis_vecs = None
         if self._mutation_type == "svd":
             basis_vecs, _ = compute_svd_basis_at_hook(
@@ -396,7 +343,7 @@ class LatentMutationEmitter(EmitterBase):
                 t_scalar=t_scalar,
                 unet=self._unet,
                 scheduler=self._scheduler,
-                prompt_embedding=self._prompt_embedding,
+                prompt_embedding=current_prompt_embed,
                 guidance_scale=self._guidance_scale,
                 k=self._svd_k,
                 iters=self._svd_iters,
@@ -406,28 +353,26 @@ class LatentMutationEmitter(EmitterBase):
                 layer=self._svd_layer,
             )
 
-        # 6. Generate the batch of offspring
+        # 5. Generate Batch of Offspring
         new_latents_list = []
-        for _ in range(self.batch_size):
-            alpha = self._rng.uniform(self._alpha_min, self._alpha_max)
+        for i in range(self.batch_size):
+            
+            # [LOGIC] If Gen 0, keep index 0 as exact copy (Original Image)
+            if is_first_generation and i == 0:
+                alpha = 0.0
+            else:
+                alpha = self._rng.uniform(self._alpha_min, self._alpha_max)
             
             if self._mutation_type == "svd":
                 svd_index = self._rng.integers(0, len(basis_vecs))
-                # x_t_star is (1, 4, 64, 64)
                 x_t_star = self._apply_svd_edit(x_t, basis_vecs, alpha, svd_index)
-            
-            elif self._mutation_type == "noise":
-                # x_t_star is (1, 4, 64, 64)
+            else:
                 x_t_star = self._apply_noise_edit(x_t, alpha)
             
-            else:
-                raise RuntimeError("Invalid mutation type.")
-            
-            # Invert the mutated latent
-            # x_T_star is (1, 4, 64, 64)
+            # Invert back to t=0 (Latent Space)
             x_T_star = invert_to_start(
                 start_latents=x_t_star,
-                prompt_embedding=self._prompt_embedding,
+                prompt_embedding=current_prompt_embed, 
                 unet=self._unet,
                 scheduler=self._scheduler,
                 guidance_scale=self._guidance_scale,
@@ -437,14 +382,38 @@ class LatentMutationEmitter(EmitterBase):
             )
             new_latents_list.append(x_T_star)
             
-        # 7. Stack and convert to NumPy
-        solutions_tensor = torch.stack(new_latents_list)
+        # Stack -> (Batch, 1, C, H, W)
+        mutated_latents_batch = torch.stack(new_latents_list).cpu().numpy()
+        
+        # Squeeze batch dim 1 -> (Batch, C, H, W)
+        if mutated_latents_batch.ndim == 5 and mutated_latents_batch.shape[1] == 1:
+             mutated_latents_batch = mutated_latents_batch.squeeze(1)
 
-        #
-        solutions_for_archive = solutions_tensor.reshape(self.batch_size, *self.solution_dim)
+        # 6. Construct Final Dictionary
+        final_batch = {}
+        
+        # New Latents
+        final_batch["latent"] = mutated_latents_batch
+        
+        # Repeat Prompts (Identical for whole batch)
+        parent_prompt = parent_sol["prompt_embedding"]
+        final_batch["prompt_embedding"] = np.repeat(
+            parent_prompt[np.newaxis, ...], 
+            self.batch_size, 
+            axis=0
+        )
+        
+        # Repeat any extra keys from schema (if they exist)
+        for key in self._solution_schema.keys():
+            if key not in ["latent", "prompt_embedding"]:
+                parent_item = parent_sol[key]
+                final_batch[key] = np.repeat(
+                    parent_item[np.newaxis, ...], 
+                    self.batch_size, 
+                    axis=0
+                )
+                
+        return final_batch
 
-        return solutions_for_archive.cpu().numpy()
-    
     def tell(self, solution, objective, measures, add_info, **fields):
-        # No-op, as we sample parents uniformly.
         pass

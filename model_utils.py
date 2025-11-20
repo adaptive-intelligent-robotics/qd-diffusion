@@ -90,13 +90,13 @@ def get_text_embeddings(prompt,
     text_embeddings = torch.cat([uncond_embeddings, text_embeddings]) 
     return text_embeddings.detach()
 
-def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, offspring_dir, images_dir):
+def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, offspring_dir, images_dir, model_name):
     
     if config.save_offspring_data:
-        if config.algorithm.genotype == "embedding":
-            torch.save(solutions, os.path.join(offspring_dir, f"{itr}_prompt_embeddings.pt"))
-        elif config.algorithm.genotype == "latents":
-            torch.save(solutions, os.path.join(offspring_dir, f"{itr}_latents.pt"))
+        torch.save(solutions["prompt_embedding"], os.path.join(offspring_dir, f"{itr}_prompt_embeddings.pt"))
+        torch.save(solutions["latent"], os.path.join(offspring_dir, f"{itr}_latents.pt"))
+        if model_name == "sdxl-turbo":
+            torch.save(solutions["pooled_prompt_embedding"], os.path.join(offspring_dir, f"{itr}_pooled_prompt_embeddings.pt"))
         torch.save(fitnesses, os.path.join(offspring_dir, f"{itr}_fitnesses.pt"))
         torch.save(descriptors, os.path.join(offspring_dir, f"{itr}_descriptors.pt"))
         
@@ -111,9 +111,18 @@ def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, 
 
 def save_repertoire(repertoire,
                     itr,
-                    save_dir
+                    save_dir,
+                    config
 ):  
-    torch.save(repertoire.data()["solution"], os.path.join(save_dir, f"{itr}_solutions.pt"))
+    prompt_embeddings = repertoire.data()["solution"]["prompt_embedding"]
+    latents = repertoire.data()["solution"]["latent"]
+    torch.save(prompt_embeddings, os.path.join(save_dir, f"{itr}_prompt_embeddings.pt"))
+    torch.save(latents, os.path.join(save_dir, f"{itr}_latents.pt"))
+    
+    if config.model.name == "sdxl-turbo":
+        pooled_prompt_embeddings = repertoire.data()["solution"]["pooled_prompt_embedding"]
+        torch.save(pooled_prompt_embeddings, os.path.join(save_dir, f"{itr}_pooled_prompt_embeddings.pt"))
+        
     torch.save(repertoire.data()["objective"], os.path.join(save_dir, f"{itr}_fitnesses.pt"))
     torch.save(repertoire.data()["measures"], os.path.join(save_dir, f"{itr}_descriptors.pt"))
 
@@ -121,27 +130,28 @@ def save_repertoire(repertoire,
 
 
 def plot_repertoire_images(
-    init_prompt_embedding,
-    init_latent,
     archive,
     itr,
     config,
     generate_images_from_latents_fun,
     save_dir,
 ):
+    latents = archive.data()["solution"]["latent"]
+    num_sols = latents.shape[0]
+    prompt_embeddings = archive.data()["solution"]["prompt_embedding"]
+    toggled_prompt_embeddings = toggle_prompt_embedding_shape(prompt_embeddings)
     
-    if config.algorithm.genotype == "latents":
-        latents = archive.data()["solution"] 
-        num_sols = latents.shape[0]       
-        prompt_embeddings = expand_prompt_embedding(init_prompt_embedding, num_sols).detach().cpu()
-    
-    elif config.algorithm.genotype == "embedding":
-        sols = archive.data()["solution"]
-        num_sols = sols.shape[0]
-        prompt_embeddings = toggle_prompt_embedding_shape(sols)
-        latents = init_latent.repeat(num_sols, 1, 1, 1)
-    
-    generated_images = generate_images_from_latents_fun(latents, prompt_embeddings)
+    if config.model.name == "sd-1-5":
+        generated_images = generate_images_from_latents_fun(latents, toggled_prompt_embeddings)
+        
+    elif config.model.name == "sdxl-turbo":
+        pooled_prompt_embeddings = archive.data()["solution"]["pooled_prompt_embedding"]
+        generated_images = generate_images_from_latents_fun(
+            latents,
+            toggled_prompt_embeddings,
+            pooled_prompt_embeddings,
+        )
+
     generated_images_np = np.array(generated_images.cpu())
     generated_images_np = generated_images_np.transpose(0, 2, 3, 1)
     generated_images_np = (generated_images_np + 1) / 2

@@ -8,15 +8,17 @@ import wandb
 torch.cuda.empty_cache()
 
 from diffusers import (
+    AutoPipelineForText2Image,
     DDIMScheduler,
     StableDiffusionPipeline
 )
-from emitters.custom_gaussian import CustomGaussianEmitter
-from emitters.latent_emitter import LatentMutationEmitter
+from emitters.custom_gaussian import GaussianDictEmitter
+from emitters.latent_emitter import SDLatentEmitter
+from emitters.dict_scheduler import DictScheduler
 from functools import partial
+from image_utils import save_image
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
-    toggle_prompt_embedding_shape,
     get_text_embeddings,
     generate_images_from_latents,
     plot_repertoire_images,
@@ -25,9 +27,7 @@ from model_utils import (
 )
 
 from omegaconf import DictConfig, OmegaConf
-from repertoires.dns import DNSArchive
-from ribs.archives import GridArchive
-from ribs.schedulers import Scheduler
+from repertoires.dns import DNSDictArchive
 from scoring_function import get_scoring_function
 from transformers import (
     CLIPModel,
@@ -81,12 +81,6 @@ def main(config: DictConfig) -> None:
         filename=_metrics_dir + f"mapelites-logs.csv",
         header=list(metrics.keys())
     )
-    # Load Diffusion Model Pipelines
-    logger.warning("--- Loading Models ---")
-    pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to("cuda")
-    scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
-    clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", torch_dtype=torch.float32, cache_dir="/var/tmp/hf")
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to("cuda") # type: ignore
     
     # Set random seed for reproducibility
     generator = generator=torch.Generator(device="cuda").manual_seed(config.algorithm.seed)
@@ -94,15 +88,67 @@ def main(config: DictConfig) -> None:
     torch.cuda.manual_seed_all(config.algorithm.seed)
     np.random.seed(config.algorithm.seed)
     
-    # Set up scoring function
-    generate_images_from_latents_fn = partial(generate_images_from_latents,
-        num_inference_steps=config.generation.num_inference_steps,
-        guidance_scale=config.generation.guidance_scale,
-        scheduler=scheduler,
-        unet=pipe.unet,
-        vae=pipe.vae,
-    )
+    # Load Diffusion Model Pipelines
+    logger.warning("--- Loading Models ---")
     
+    init_latent = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
+    
+    if config.model.name == "sd-1-5":
+        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to("cuda")
+        scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+        solution_schema = {
+            "latent": (4, 64, 64),
+            "prompt_embedding": (2, 77, 768),
+        }
+        generate_images_from_latents_fn = partial(generate_images_from_latents,
+            num_inference_steps=config.generation.num_inference_steps,
+            guidance_scale=config.generation.guidance_scale,
+            scheduler=scheduler,
+            unet=pipe.unet,
+            vae=pipe.vae,
+        )        
+        
+        init_prompt_embedding = get_text_embeddings(
+            prompt=config.generation.prompt,
+            batch_size=1,
+            tokenizer=pipe.tokenizer,
+            text_encoder=pipe.text_encoder,
+            with_grad=False,
+        ) # [batch_size * 2, 77, 768]
+        init_latent *= scheduler.init_noise_sigma
+        init_image = generate_images_from_latents_fn(
+            latents=init_latent,
+            prompt_embedding=init_prompt_embedding
+        )
+        
+        # Save seed image, latent and prompt embedding
+        torch.save(init_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embedding.pt"))
+        torch.save(init_latent.cpu(), os.path.join(_initial_values_dir, "initial_latent.pt"))
+        save_image(init_image[0], os.path.join(_initial_values_dir, "initial_image.png"))
+        
+        # Create initial solution dict
+        initial_solution = {
+            "latent": init_latent.cpu(),
+            "prompt_embedding": init_prompt_embedding.cpu(),
+        }
+        
+        del init_image, init_latent, init_prompt_embedding
+        gc.collect()
+            
+    elif config.model.name == "sdxl-turbo":
+        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float32)
+        pipe.to("cuda")
+        solution_schema = {
+            "latent": (4, 64, 64),
+            "prompt_embedding": (2, 77, 1024),
+            "pooled_prompt_embedding": (2, 1024),
+        }
+    
+    # Load CLIP model for fitness calculations
+    clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", torch_dtype=torch.float32, cache_dir="/var/tmp/hf")
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to("cuda") # type: ignore
+    
+    # Set up scoring function
     if config.algorithm.name == "map_elites":
         project_desc = True
     else:
@@ -117,89 +163,57 @@ def main(config: DictConfig) -> None:
         clip_tokenizer=clip_tokenizer,
         generate_images_from_latents_fn=generate_images_from_latents_fn,
         generator=generator,
+        model_name=config.model.name,
         save_dir=_initial_values_dir,
-    )
-    
-    # Create initial images 
-    init_prompt_embeddings = get_text_embeddings(
-        prompt=config.generation.prompt,
-        batch_size=config.emitter.batch_size,
-        tokenizer=pipe.tokenizer,
-        text_encoder=pipe.text_encoder,
-        with_grad=False,
-    ) # [batch_size * 2, 77, 768]
-    init_prompt_embedding = toggle_prompt_embedding_shape(init_prompt_embeddings)[0] # Get single prompt embedding
-    torch.save(init_prompt_embeddings.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embeddings.pt"))
-    
-    init_latent = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
-    init_latents = init_latent.repeat(config.emitter.batch_size, 1, 1, 1)
-    init_latents *= scheduler.init_noise_sigma
+    ) # TO DO: set up scoring function for SDXL
         
     # Set up MAP-Elites
     if config.algorithm.name == "map_elites":
+        pass # TO DO
 
-        if config.algorithm.genotype == "embedding":
-            init_prompt_embeddings = toggle_prompt_embedding_shape(init_prompt_embeddings) # Convert to [batch_size, 2, 77, 768]
-            archive = GridArchive(
-                solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
-                dims=config.algorithm.map_elites.grid_dims,
-                ranges=config.algorithm.map_elites.grid_ranges,
-                seed=config.algorithm.seed,
-            )
-        elif config.algorithm.genotype == "latents":
-            archive = GridArchive(
-                solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
-                dims=config.algorithm.map_elites.grid_dims,
-                ranges=config.algorithm.map_elites.grid_ranges,
-                seed=config.algorithm.seed,
-            )
+    #     if config.algorithm.genotype == "embedding":
+    #         init_prompt_embeddings = toggle_prompt_embedding_shape(init_prompt_embeddings) # Convert to [batch_size, 2, 77, 768]
+    #         archive = GridArchive(
+    #             solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
+    #             dims=config.algorithm.map_elites.grid_dims,
+    #             ranges=config.algorithm.map_elites.grid_ranges,
+    #             seed=config.algorithm.seed,
+    #         )
+    #     elif config.algorithm.genotype == "latent":
+    #         archive = GridArchive(
+    #             solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
+    #             dims=config.algorithm.map_elites.grid_dims,
+    #             ranges=config.algorithm.map_elites.grid_ranges,
+    #             seed=config.algorithm.seed,
+    #         )
     
-    # Set up DNS:
-    if config.algorithm.genotype == "embedding":
-        init_prompt_embeddings = toggle_prompt_embedding_shape(init_prompt_embeddings) # Convert to [batch_size, 2, 77, 768]
-        archive = DNSArchive(
-            solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
-            measure_dim=descriptor_dim,
-            max_size=config.algorithm.max_pop_size,
-            fitness_threshold=config.algorithm.fitness_threshold,
-            k=config.algorithm.dns.k,
-            distance_metric=config.algorithm.dns.distance_metric,
-            seed=config.algorithm.seed,
-        )
-    elif config.algorithm.genotype == "latents":
-        archive = DNSArchive(
-            solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
-            measure_dim=descriptor_dim,
-            max_size=config.algorithm.max_pop_size,
-            fitness_threshold=config.algorithm.fitness_threshold,
-            k=config.algorithm.dns.k,
-            distance_metric=config.algorithm.dns.distance_metric,
-            seed=config.algorithm.seed,
-        )
-        
-      
+    archive = DNSDictArchive(
+        solution_dim=solution_schema, # ignore batch dimension
+        measure_dim=descriptor_dim,
+        max_size=config.algorithm.max_pop_size,
+        fitness_threshold=config.algorithm.fitness_threshold,
+        k=config.algorithm.dns.k,
+        distance_metric=config.algorithm.dns.distance_metric,
+        seed=config.algorithm.seed,
+        dtype=np.float32,
+    )
+     
     if config.emitter.name == "gaussian":
-        if config.algorithm.genotype == "embedding":
-            emitter = CustomGaussianEmitter(
+        emitter = GaussianDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            sigma=config.emitter.gaussian.latents_sigma,
+            batch_size=config.emitter.batch_size,
+            seed=config.algorithm.seed,
+            genotype_key=config.algorithm.genotype
+        )
+        del initial_solution
+        gc.collect()
+            
+    elif config.emitter.name == "hidden_latent" and config.model.name == "sd-1-5":
+        emitter = SDLatentEmitter(
                 archive=archive,
-                initial_solutions=init_prompt_embeddings.cpu().numpy(),
-                sigma=config.emitter.gaussian.embedding_sigma,
-                batch_size=config.emitter.batch_size,
-                seed=config.algorithm.seed,
-            )
-        elif config.algorithm.genotype == "latents":
-            emitter = CustomGaussianEmitter(
-                archive=archive,
-                initial_solutions=init_latents.cpu().numpy(),
-                sigma=config.emitter.gaussian.latents_sigma,
-                batch_size=config.emitter.batch_size,
-                seed=config.algorithm.seed,
-            )
-    elif config.emitter.name == "hidden_latent":
-        emitter = LatentMutationEmitter(
-                archive=archive,
-                initial_solutions=init_latents.cpu().numpy(),
-                prompt_embedding=init_prompt_embedding,
+                initial_solution=initial_solution,
                 unet=pipe.unet,
                 scheduler=scheduler,
                 batch_size=config.emitter.batch_size,
@@ -215,24 +229,28 @@ def main(config: DictConfig) -> None:
                 svd_fd_eps=config.emitter.hidden_latent.svd_fd_eps,
                 svd_layer=config.emitter.hidden_latent.svd_layer,
                 device=device
-            )
+        )  
+        del initial_solution
+        gc.collect() 
     
-    scheduler = Scheduler(archive, [emitter])
+    elif config.emitter.name == "prompt_embedding" and config.model.name == "sd-1-5":
+        pass # TO DO
+    
+    elif config.emitter.name == "hidden_latent" and config.model.name == "sdxl-turbo":
+        pass # TO DO
+
+    elif config.emitter.name == "prompt_embedding" and config.model.name == "sdxl-turbo":
+        pass # TO DO
+
+    scheduler = DictScheduler(archive, [emitter])
             
     if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":
         logger.warning("--- Algorithm initialisation ---")
         for itr in range(1, config.algorithm.max_iterations + 1):
             solutions = scheduler.ask()
             
-            if config.algorithm.genotype == "embedding":
-                solutions = toggle_prompt_embedding_shape(solutions) # Convert to [batch_size * 2, 77, 768]
-                fitnesses, descriptors, images = scoring_fn(init_latents, solutions)
-                save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir)
-                
-            elif config.algorithm.genotype == "latents":
-                fitnesses, descriptors, images = scoring_fn(solutions, init_prompt_embeddings.cpu().detach())
-                save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir)
-                        
+            fitnesses, descriptors, images = scoring_fn(solutions)
+            save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model.name)
             scheduler.tell(fitnesses, descriptors)
             
             current_metrics = me_metrics_function(scheduler.archive, itr, config)
@@ -244,10 +262,8 @@ def main(config: DictConfig) -> None:
             logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
             
             if itr % config.save_repertoire_period == 0:
-                save_repertoire(archive, itr, _repertoire_dir)
+                save_repertoire(archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(
-                    init_prompt_embedding,
-                    init_latent,
                     archive,
                     itr,
                     config,
@@ -257,8 +273,6 @@ def main(config: DictConfig) -> None:
         
         save_repertoire(archive, "final", _repertoire_dir)
         plot_repertoire_images(
-            init_prompt_embedding,
-            init_latent,
             archive,
             "final",
             config,
