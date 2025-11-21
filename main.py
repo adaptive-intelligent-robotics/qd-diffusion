@@ -1,4 +1,5 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 import gc
 import hydra
@@ -103,6 +104,7 @@ def main(config: DictConfig) -> None:
         solution_schema = {
             "latent": (4, 64, 64),
             "prompt_embedding": (2, 77, 768),
+            "image": (3, 512, 512),
         }
         generate_images_from_latents_fn = partial(generate_images_from_latents,
             num_inference_steps=config.generation.num_inference_steps,
@@ -146,6 +148,7 @@ def main(config: DictConfig) -> None:
             "latent": (4, 64, 64),
             "prompt_embedding": (77, 2048),
             "pooled_prompt_embedding": (1280,),
+            "image": (3, 512, 512),
         }
     
         generate_images_from_latents_fn = partial(generate_images_from_latents_sdxl_turbo,
@@ -312,7 +315,7 @@ def main(config: DictConfig) -> None:
             
             fitnesses, descriptors, images = scoring_fn(solutions)
             save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model.name)
-            scheduler.tell(fitnesses, descriptors)
+            scheduler.tell(fitnesses, descriptors, image=images)
             
             current_metrics = me_metrics_function(scheduler.archive, itr, config)
             wandb.log(current_metrics)
