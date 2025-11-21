@@ -170,6 +170,7 @@ def save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, 
             torch.save(solutions["pooled_prompt_embedding"], os.path.join(offspring_dir, f"{itr}_pooled_prompt_embeddings.pt"))
         torch.save(fitnesses, os.path.join(offspring_dir, f"{itr}_fitnesses.pt"))
         torch.save(descriptors, os.path.join(offspring_dir, f"{itr}_descriptors.pt"))
+        torch.save(images, os.path.join(offspring_dir, f"{itr}_images.pt"))
         
     if config.save_images:
         itr_image_dir = os.path.join(images_dir, f"offspring_{itr}/")
@@ -207,27 +208,10 @@ def plot_repertoire_images(
     generate_images_from_latents_fun,
     save_dir,
 ):
-    latents = archive.data()["solution"]["latent"]
-    num_sols = latents.shape[0]
-    prompt_embeddings = archive.data()["solution"]["prompt_embedding"]
+    images = archive.data()["solution"]["image"]
+    num_sols = images.shape[0]
     
-    if config.model.name == "sd-1-5":
-        toggled_prompt_embeddings = toggle_prompt_embedding_shape(prompt_embeddings)
-        generated_images = generate_images_from_latents_fun(latents, toggled_prompt_embeddings)
-        
-    elif config.model.name == "sdxl-turbo":
-        pooled_prompt_embeddings = archive.data()["solution"]["pooled_prompt_embedding"]
-        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * num_sols).to(latents.device)
-        
-        generated_images = generate_images_from_latents_fun(
-            latents,
-            prompt_embeddings,
-            pooled_prompt_embeddings,
-            time_ids=time_ids,
-        )
-
-    generated_images_np = np.array(generated_images.cpu())
-    generated_images_np = generated_images_np.transpose(0, 2, 3, 1)
+    generated_images_np = images.transpose(0, 2, 3, 1)
     generated_images_np = (generated_images_np + 1) / 2
     generated_images_np = np.clip(generated_images_np, 0, 1)
     
