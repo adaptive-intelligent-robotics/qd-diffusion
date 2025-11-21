@@ -1,4 +1,5 @@
 import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 import gc
 import hydra
 import logging
@@ -15,6 +16,7 @@ from diffusers import (
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.latent_emitter import SDLatentEmitter
 from emitters.dict_scheduler import DictScheduler
+from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
 from functools import partial
 from image_utils import save_image
 from metrics import CSVLogger, me_metrics_function
@@ -96,7 +98,7 @@ def main(config: DictConfig) -> None:
     init_latent = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
     
     if config.model.name == "sd-1-5":
-        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to("cuda")
+        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", version="fp16").to("cuda")
         scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
         solution_schema = {
             "latent": (4, 64, 64),
@@ -138,7 +140,7 @@ def main(config: DictConfig) -> None:
         gc.collect()
             
     elif config.model.name == "sdxl-turbo":
-        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", dtype=torch.float32)
+        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo")
         pipe.to("cuda")
         solution_schema = {
             "latent": (4, 64, 64),
@@ -206,8 +208,9 @@ def main(config: DictConfig) -> None:
         generator=generator,
         model_name=config.model.name,
         save_dir=_initial_values_dir,
-    ) # TO DO: set up scoring function for SDXL
-        
+    )
+    
+    logger.warning("--- Setting up Archive ---")
     # Set up MAP-Elites
     if config.algorithm.name == "map_elites":
         pass # TO DO
@@ -239,6 +242,7 @@ def main(config: DictConfig) -> None:
         dtype=np.float32,
     )
      
+    logger.warning("--- Setting up Emitter ---")
     if config.emitter.name == "gaussian":
         emitter = GaussianDictEmitter(
             archive=archive,
@@ -251,7 +255,7 @@ def main(config: DictConfig) -> None:
         del initial_solution
         gc.collect()
             
-    elif config.emitter.name == "hidden_latent" and config.model.name == "sd-1-5":
+    elif config.emitter.name == "hidden_layer" and config.model.name == "sd-1-5":
         emitter = SDLatentEmitter(
                 archive=archive,
                 initial_solution=initial_solution,
@@ -259,29 +263,45 @@ def main(config: DictConfig) -> None:
                 scheduler=scheduler,
                 batch_size=config.emitter.batch_size,
                 seed=config.algorithm.seed,
-                mutation_type=config.emitter.hidden_latent.mutation_type,
+                mutation_type=config.emitter.hidden_layer.mutation_type,
                 guidance_scale=config.generation.guidance_scale,
                 num_inference_steps=config.generation.num_inference_steps,
-                hook_proportion = config.emitter.hidden_latent.hook_proportion,
-                alpha_min=config.emitter.hidden_latent.alpha_min,
-                alpha_max=config.emitter.hidden_latent.alpha_max,
-                svd_k=config.emitter.hidden_latent.svd_k,
-                svd_iters=config.emitter.hidden_latent.svd_iters,
-                svd_fd_eps=config.emitter.hidden_latent.svd_fd_eps,
-                svd_layer=config.emitter.hidden_latent.svd_layer,
+                hook_proportion = config.emitter.hidden_layer.hook_proportion,
+                alpha_min=config.emitter.hidden_layer.alpha_min,
+                alpha_max=config.emitter.hidden_layer.alpha_max,
+                svd_k=config.emitter.hidden_layer.svd_k,
+                svd_iters=config.emitter.hidden_layer.svd_iters,
+                svd_fd_eps=config.emitter.hidden_layer.svd_fd_eps,
+                svd_layer=config.emitter.hidden_layer.svd_layer,
                 device=device
-        )  
-        del initial_solution
-        gc.collect() 
+        )   
     
     elif config.emitter.name == "prompt_embedding" and config.model.name == "sd-1-5":
         pass # TO DO
     
-    elif config.emitter.name == "hidden_latent" and config.model.name == "sdxl-turbo":
-        pass # TO DO
+    elif config.emitter.name == "hidden_layer" and config.model.name == "sdxl-turbo":
+        emitter = SDXLHiddenLayerEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            mutation_key=config.algorithm.genotype,
+            mutation_type=config.emitter.hidden_layer.mutation_type,
+            batch_size=config.emitter.batch_size,
+            unet=pipe.unet,
+            scheduler=pipe.scheduler,
+            alpha_min=config.emitter.hidden_layer.alpha_min,
+            alpha_max=config.emitter.hidden_layer.alpha_max,
+            sigma=config.emitter.hidden_layer.sigma,
+            svd_k=config.emitter.hidden_layer.svd_k,
+            svd_iters=config.emitter.hidden_layer.svd_iters,
+            svd_fd_eps=config.emitter.hidden_layer.svd_fd_eps,
+            svd_layer=config.emitter.hidden_layer.svd_layer,
+            seed=config.algorithm.seed,  
+            device=device,  
+        )
+    
 
-    elif config.emitter.name == "prompt_embedding" and config.model.name == "sdxl-turbo":
-        pass # TO DO
+    del initial_solution
+    gc.collect()
 
     scheduler = DictScheduler(archive, [emitter])
             
