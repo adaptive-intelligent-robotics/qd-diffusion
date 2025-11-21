@@ -29,6 +29,7 @@ protobuf
 regex
 requests
 ribs
+scikit-image
 scikit-learn
 scipy
 tensorboardx
