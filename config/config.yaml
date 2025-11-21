@@ -1,6 +1,6 @@
 hydra:
     run:
-        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}/${algorithm.genotype}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
+        dir: ${hydra:runtime.cwd}/output/${model.name}/${generation.prompt}/${algorithm.name}/${algorithm.genotype}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
     sweep:
         dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}
     output_subdir: .
@@ -10,7 +10,7 @@ defaults:
 
 # Model configuration
 model:
-  name: "stabilityai/sd-turbo"
+  name: "sdxl-turbo" # sd-1-5 or sdxl-turbo
   device: "cuda"  # or "cpu"
   torch_dtype: "float16"  # or "float32"
 
@@ -30,15 +30,15 @@ descriptor:
 
 # Emitter Params
 emitter:
-  name: "gaussian" # hidden_latent, gaussian
-  batch_size: 2
+  name: "hidden_layer" # hidden_latent, gaussian
+  batch_size: 16
   gaussian:
     latents_sigma: 0.4
     embedding_sigma: 0.2
   hidden_latent:
     mutation_type: "svd"
-    alpha_min: -10
-    alpha_max: 10
+    alpha_min: -20
+    alpha_max: 20
     hook_proportion: 0.6
     svd_k: 10
     svd_iters: 20
@@ -50,8 +50,8 @@ emitter:
 algorithm:
   name: "dns"  # map_elites, dns, cma_es or adam
   seed: 42
-  genotype: "embedding" # "embedding" or "latents"
-  max_pop_size: 256
+  genotype: "latent" # "latent", "prompt_embedding", "pooled_prompt_embedding"
+  max_pop_size: 32
   max_iterations: 200
   fitness_threshold: 0.25 # -1 if we don't want to threshold
 
@@ -89,6 +89,7 @@ algorithm:
 save_offspring_data: True
 save_images: True
 save_repertoire_period: 50
+ssim_sample_size: -1 # integer or -1 for full calculation
 
 # Output configuration
 output:

@@ -81,7 +81,17 @@ def main(config: DictConfig) -> None:
     os.makedirs(_repertoire_dir, exist_ok=True)
     os.makedirs(_offspring_dir, exist_ok=True)
     
-    metrics = dict.fromkeys(["iteration", "qd_score", "coverage", "max_fitness", "time", "evaluations"], np.array([]))
+    metrics = dict.fromkeys(["iteration",
+        "qd_score",
+        "coverage",
+        "max_fitness",
+        "time",
+        "evaluations",
+        "avg_pairwise_dist",
+        "avg_dissimilarity_ssim",
+        "total_variance",
+        "top_10_fitness_avg",
+    ], np.array([]))
     csv_logger = CSVLogger(
         filename=_metrics_dir + f"mapelites-logs.csv",
         header=list(metrics.keys())
@@ -317,13 +327,15 @@ def main(config: DictConfig) -> None:
             save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model.name)
             scheduler.tell(fitnesses, descriptors, image=images)
             
-            current_metrics = me_metrics_function(scheduler.archive, itr, config)
+            current_metrics = me_metrics_function(scheduler.archive, itr, config, config.ssim_sample_size)
             wandb.log(current_metrics)
             csv_logger.log(current_metrics)
             logger.warning(f"--- ITERATION: {itr} ---")
             logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
-            logger.warning(f"Coverage: {current_metrics['coverage']:.3f}%")
             logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
+            logger.warning(f"Top 10 Avg Fitness: {current_metrics['top_10_fitness_avg']:.3f}")
+            logger.warning(f"SSIM Diversity: {current_metrics['avg_dissimilarity_ssim']:.3f}")
+            logger.warning(f"Avg Pairwise Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
             
             if itr % config.save_repertoire_period == 0:
                 save_repertoire(archive, itr, _repertoire_dir, config)
