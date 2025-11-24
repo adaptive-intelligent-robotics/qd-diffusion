@@ -16,6 +16,7 @@ from diffusers import (
 )
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
+from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
@@ -305,6 +306,15 @@ def main(config: DictConfig) -> None:
             initial_solution=initial_solution,
             batch_size=config.batch_size,
             seed=config.seed,
+        )
+    
+    elif config.emitter.type == "imagebreeder":
+        emitter = ImageBreederEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            mutation_type=config.emitter.name, 
+            batch_size=config.batch_size,
+            seed=config.seed
         )
 
     del initial_solution
