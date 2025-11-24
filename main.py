@@ -248,6 +248,41 @@ def main(config: DictConfig) -> None:
             seed=config.seed,
             genotype_key=config.emitter.genotype
         )
+    elif config.emitter.type == "multi-gaussian":
+        if config.model.name == "sd-1-5":
+            batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
+        elif config.model.name == "sdxl-turbo":
+            batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
+        
+        emitter_1 = GaussianDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            sigma=config.emitter.latent_sigma,
+            batch_size=batch_sizes[0],
+            seed=config.seed,
+            genotype_key="latent"
+        )
+        
+        emitter_2 = GaussianDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            sigma=config.emitter.prompt_embedding_sigma,
+            batch_size=batch_sizes[1],
+            seed=config.seed,
+            genotype_key="prompt_embedding"
+        )
+        emitters = [emitter_1, emitter_2]
+        
+        if config.model.name == "sdxl-turbo":
+            emitter_3 = GaussianDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                sigma=config.emitter.pooled_prompt_embedding_sigma,
+                batch_size=batch_sizes[2],
+                seed=config.seed,
+                genotype_key="pooled_prompt_embedding"
+            )
+            emitters.append(emitter_3)
             
     elif config.emitter.type == "hidden_layer" and config.model.name == "sd-1-5":
         if config.emitter.model_type != "sd-1-5":
@@ -297,6 +332,119 @@ def main(config: DictConfig) -> None:
             seed=config.seed,  
             device=device,  
         )
+
+    elif config.emitter.type == "hidden_layer_multi":
+        if config.model.name == "sd-1-5":
+            batch_size_1 = int(config.batch_size//2)
+            batch_size_2 = config.batch_size - batch_size_1
+                        
+            emitter_1 = SDHiddenLayerEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="latent",
+                mutation_type=config.emitter.mutation_type,
+                unet=pipe.unet,
+                scheduler=scheduler,
+                batch_size=batch_size_1,
+                seed=config.seed,
+                guidance_scale=config.model.guidance_scale,
+                num_inference_steps=config.model.num_inference_steps,
+                hook_proportion = config.emitter.hook_proportion,
+                alpha_min=config.emitter.latent_alpha_min,
+                alpha_max=config.emitter.latent_alpha_max,
+                sigma=config.emitter.latent_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                device=device
+            ) 
+                        
+            emitter_2 = SDHiddenLayerEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="prompt_embedding",
+                mutation_type=config.emitter.mutation_type,
+                unet=pipe.unet,
+                scheduler=scheduler,
+                batch_size=batch_size_2,
+                seed=config.seed,
+                guidance_scale=config.model.guidance_scale,
+                num_inference_steps=config.model.num_inference_steps,
+                hook_proportion = config.emitter.hook_proportion,
+                alpha_min=config.emitter.prompt_embedding_alpha_min,
+                alpha_max=config.emitter.prompt_embedding_alpha_max,
+                sigma=config.emitter.prompt_embedding_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                device=device
+            ) 
+            
+            emitters = [emitter_1, emitter_2]
+            
+        elif config.model.name == "sdxl-turbo":
+            batch_size_1 = int(config.batch_size // 3)
+            batch_size_2 = int(config.batch_size // 3)
+            batch_size_3 = config.batch_size - batch_size_1 - batch_size_2
+            
+            emitter_1 = SDXLHiddenLayerEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="latent",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_1,
+                unet=pipe.unet,
+                scheduler=pipe.scheduler,
+                alpha_min=config.emitter.latent_alpha_min,
+                alpha_max=config.emitter.latent_alpha_max,
+                sigma=config.emitter.latent_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitter_2 = SDXLHiddenLayerEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="prompt_embedding",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_2,
+                unet=pipe.unet,
+                scheduler=pipe.scheduler,
+                alpha_min=config.emitter.prompt_embedding_alpha_min,
+                alpha_max=config.emitter.prompt_embedding_alpha_max,
+                sigma=config.emitter.prompt_embedding_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitter_3 = SDXLHiddenLayerEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="pooled_prompt_embedding",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_3,
+                unet=pipe.unet,
+                scheduler=pipe.scheduler,
+                alpha_min=config.emitter.pooled_prompt_embedding_alpha_min,
+                alpha_max=config.emitter.pooled_prompt_embedding_alpha_max,
+                sigma=config.emitter.pooled_prompt_embedding_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitters = [emitter_1, emitter_2, emitter_3]
+            
     elif config.emitter.type == "prompt_embedding" and config.model.name == "sd-1-5":
         pass # TO DO
 
@@ -316,11 +464,14 @@ def main(config: DictConfig) -> None:
             batch_size=config.batch_size,
             seed=config.seed
         )
+    
+    if config.emitter.genotype != "multi":
+        scheduler = DictScheduler(archive, [emitter])
+    else:
+        scheduler = DictScheduler(archive, emitters)
 
     del initial_solution
     gc.collect()
-
-    scheduler = DictScheduler(archive, [emitter])
             
     if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":
         logger.warning("--- Algorithm initialisation ---")
