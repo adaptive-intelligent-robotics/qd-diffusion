@@ -6,8 +6,8 @@ model_type: "sdxl-turbo"
 
 alpha_min: -20
 alpha_max: 20
-svd_k: 10
-svd_iters: 20
+svd_k: 3
+svd_iters: 5
 svd_fd_eps: 1e-3
 svd_layer: "mid_block"
 
