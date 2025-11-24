@@ -1,98 +1,31 @@
 hydra:
     run:
-        dir: ${hydra:runtime.cwd}/output/${model.name}/${generation.prompt}/${algorithm.name}/${algorithm.genotype}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${algorithm.seed}
-    sweep:
-        dir: ${hydra:runtime.cwd}/output/${generation.prompt}/${algorithm.name}
+        dir: ${hydra:runtime.cwd}/output/${model.name}/${algorithm.name}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${seed}
     output_subdir: .
 
 defaults:
   - _self_
-
-# Model configuration
-model:
-  name: "sdxl-turbo" # sd-1-5 or sdxl-turbo
-  device: "cuda"  # or "cpu"
-  torch_dtype: "float16"  # or "float32"
+  - emitter: sdxl-hidden-layer-latent-svd
+  - algorithm: dns
+  - model: sdxl-turbo
 
 # Generation parameters
-generation:
-  prompt: "A bowl of soup that looks like a monster knitted out of wool"
-  num_inference_steps: 50
-  guidance_scale: 7.5
-  negative_prompt: ""
-  num_images_per_prompt: 1
+prompt: "A bowl of soup that looks like a monster knitted out of wool"
+seed: 42
+
+# General algorithm params
+max_pop_size: 64
+batch_size: 16
+max_iterations: 200
+fitness_threshold: 0.25  # -1 if we don't want to threshold
 
 # Descriptor Params
-descriptor:
-  name: "dino-v2"
-  project_desc: False
-  projection_dim: 2
-
-# Emitter Params
-emitter:
-  name: "hidden_layer" # hidden_latent, gaussian
-  batch_size: 16
-  gaussian:
-    latents_sigma: 0.4
-    embedding_sigma: 0.2
-  hidden_latent:
-    mutation_type: "svd"
-    alpha_min: -20
-    alpha_max: 20
-    hook_proportion: 0.6
-    svd_k: 10
-    svd_iters: 20
-    svd_fd_eps: 1e-3
-    svd_layer: "mid_block"
-
-
-# Algorithm configuration
-algorithm:
-  name: "dns"  # map_elites, dns, cma_es or adam
-  seed: 42
-  genotype: "latent" # "latent", "prompt_embedding", "pooled_prompt_embedding"
-  max_pop_size: 32
-  max_iterations: 200
-  fitness_threshold: 0.25 # -1 if we don't want to threshold
-
-  map_elites:
-    batch_size: 4
-    grid_dims: [16, 16]
-    grid_ranges:
-      - [-50.0, 50.0]
-      - [-50.0, 50.0]
-    num_init_cvt_samples: 50000
-    num_centroids: 1024
-    min_descriptor: -50.0
-    max_descriptor: 50.0
-    with_grad: False
-  dns:
-    k: 3
-    distance_metric: "cosine"
-
-
-  # adam:
-  #   learning_rate: 0.05
-  #   max_iterations: 1000
-  #   batch_size: 1
-  #   with_grad: True
-
-  # cma_es:
-  #   population_size: 4
-  #   num_best: 2
-  #   sigma: 0.1
-  #   delay_eigen_decomposition: True
-  #   max_iterations: 200
-  #   with_grad: False
+descriptor: "dino-v2" # can be "dino-v2" or "dreamsim"
 
 # Saving params
 save_offspring_data: True
 save_images: True
 save_repertoire_period: 50
 ssim_sample_size: -1 # integer or -1 for full calculation
+wandb: False
 
-# Output configuration
-output:
-  save_format: "png"
-
-# ... existing code ... 

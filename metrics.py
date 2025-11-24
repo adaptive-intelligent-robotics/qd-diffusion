@@ -61,7 +61,7 @@ def me_metrics_function(
     # 1. Basic Setup
     current_metrics = {}
     current_metrics["iteration"] = iteration
-    current_metrics["evaluations"] = (iteration + 1) * config.emitter.batch_size
+    current_metrics["evaluations"] = (iteration + 1) * config.batch_size
     
     # Archive Stats
     current_metrics["coverage"] = repertoire.stats.coverage

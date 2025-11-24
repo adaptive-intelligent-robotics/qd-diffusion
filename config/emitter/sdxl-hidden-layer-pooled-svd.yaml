@@ -1,0 +1,13 @@
+name: "sdxl-hidden-layer-pooled-svd"
+type: "hidden_layer"
+genotype: "pooled_prompt_embedding"
+mutation_type: "svd"
+
+alpha_min: -20
+alpha_max: 20
+svd_k: 10
+svd_iters: 20
+svd_fd_eps: 1e-3
+svd_layer: "mid_block"
+
+sigma: 0.4 # not used here

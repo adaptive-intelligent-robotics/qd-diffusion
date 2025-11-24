@@ -1,0 +1,14 @@
+name: "sd-1-5-hidden-layer-latent-svd"
+type: "hidden_layer"
+genotype: "latent"
+mutation_type: "svd"
+
+alpha_min: -20
+alpha_max: 20
+hook_proportion: 0.6
+svd_k: 10
+svd_iters: 20
+svd_fd_eps: 1e-3
+svd_layer: "mid_block"
+
+sigma: 0.4 # not used here

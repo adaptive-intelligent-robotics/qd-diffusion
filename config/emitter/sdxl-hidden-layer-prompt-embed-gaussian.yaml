@@ -1,0 +1,14 @@
+name: "sdxl-hidden-layer-prompt-embed-gaussian"
+type: "hidden_layer"
+genotype: "prompt_embedding"
+mutation_type: "gaussian"
+
+sigma: 0.4
+
+svd_k: 10
+svd_iters: 20
+svd_fd_eps: 1e-3
+svd_layer: "mid_block"
+
+alpha_min: -20 # not used here
+alpha_max: 20 # not used here

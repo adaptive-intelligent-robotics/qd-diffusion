@@ -1,0 +1,4 @@
+name: "gaussian-noise-pooled"
+type: "gaussian"
+genotype: "pooled_prompt_embedding"
+sigma: 0.2
