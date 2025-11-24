@@ -1,4 +1,4 @@
-name: "hidden-layer-multi-svd"
+name: "multi-hidden-layer-multi-svd"
 type: "hidden_layer_multi"
 genotype: "multi"
 mutation_type: "svd" 

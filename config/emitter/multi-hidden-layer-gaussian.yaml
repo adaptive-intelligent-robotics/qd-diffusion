@@ -1,4 +1,4 @@
-name: "hidden-layer-multi-gaussian"
+name: "multi-hidden-layer-gaussian"
 type: "hidden_layer_multi"
 genotype: "multi"
 mutation_type: "gaussian" 
