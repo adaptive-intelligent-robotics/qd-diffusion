@@ -41,7 +41,6 @@ from transformers import (
     CLIPTokenizerFast,
 )
 
-os.environ["WANDB_MODE"] = "disabled"
 
 @hydra.main(config_path="config/", config_name="config.yaml", version_base="1.2")
 def main(config: DictConfig) -> None:
@@ -66,8 +65,9 @@ def main(config: DictConfig) -> None:
     # Initialise wandb
     wandb.init(
         project=f"Latent Exploration",
-        name=f"{config.algorithm}",
+        name=f"{config.algorithm.name}",
         config=OmegaConf.to_container(config, resolve=True),
+        mode=config.wandb_mode,
     )
 
     # Make directories for saving data
@@ -94,6 +94,7 @@ def main(config: DictConfig) -> None:
         "total_variance",
         "top_10_fitness_avg",
     ], np.array([]))
+    
     csv_logger = CSVLogger(
         filename=_metrics_dir + f"mapelites-logs.csv",
         header=list(metrics.keys())

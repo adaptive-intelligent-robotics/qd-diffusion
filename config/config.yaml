@@ -27,5 +27,5 @@ save_offspring_data: True
 save_images: True
 save_repertoire_period: 50
 ssim_sample_size: 500 # integer or -1 for full calculation
-wandb: False
+wandb_mode: "online" # can be "online", "offline", or "disabled"
 
