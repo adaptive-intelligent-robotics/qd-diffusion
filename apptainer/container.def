@@ -48,7 +48,10 @@ From: ubuntu:22.04
 	git clone https://{{ gitlab_user }}:{{ gitlab_token }}@gitlab.doc.ic.ac.uk/AIRL/research_projects/hannah_janmohamed/latent_exploration.git src/ && cd src/
 	git checkout {{ commit }}
 
-	# Install requirements
+	# Pytorch must be installed before xformers
+	python -m pip install -U --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+	
+	# Install all other requirements
 	pip install -r requirements.txt
 	pip install --upgrade diffusers[flax]
 
