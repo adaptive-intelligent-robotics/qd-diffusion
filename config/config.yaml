@@ -10,13 +10,13 @@ defaults:
   - model: sdxl-turbo
 
 # Generation parameters
-prompt: "A bowl of soup that looks like a monster knitted out of wool"
+prompt: "metal"
 seed: 42
 
 # General algorithm params
 max_pop_size: 64
 batch_size: 16
-max_iterations: 200
+max_iterations: 625
 fitness_threshold: 0.25  # -1 if we don't want to threshold
 
 # Descriptor Params
@@ -26,6 +26,6 @@ descriptor: "dino-v2" # can be "dino-v2" or "dreamsim"
 save_offspring_data: True
 save_images: True
 save_repertoire_period: 50
-ssim_sample_size: -1 # integer or -1 for full calculation
+ssim_sample_size: 500 # integer or -1 for full calculation
 wandb: False
 
