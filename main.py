@@ -64,7 +64,7 @@ def main(config: DictConfig) -> None:
     # Initialise wandb
     wandb.init(
         project=f"Latent Exploration",
-        name=f"{config.algorithm.name}",
+        name=f"{config.algorithm}",
         config=OmegaConf.to_container(config, resolve=True),
     )
 
@@ -98,18 +98,18 @@ def main(config: DictConfig) -> None:
     )
     
     # Set random seed for reproducibility
-    generator = generator=torch.Generator(device="cuda").manual_seed(config.algorithm.seed)
-    torch.manual_seed(config.algorithm.seed)
-    torch.cuda.manual_seed_all(config.algorithm.seed)
-    np.random.seed(config.algorithm.seed)
+    generator = generator=torch.Generator(device=device).manual_seed(config.seed)
+    torch.manual_seed(config.seed)
+    torch.cuda.manual_seed_all(config.seed)
+    np.random.seed(config.seed)
     
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
     
-    init_latent = torch.randn(1, 4, 64, 64, device="cuda", generator=generator)
-    
+    init_latent = torch.randn(1, 4, 64, 64, device=device, generator=generator)
+        
     if config.model.name == "sd-1-5":
-        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", version="fp16").to("cuda")
+        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to(device)
         scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
         solution_schema = {
             "latent": (4, 64, 64),
@@ -117,15 +117,15 @@ def main(config: DictConfig) -> None:
             "image": (3, 512, 512),
         }
         generate_images_from_latents_fn = partial(generate_images_from_latents,
-            num_inference_steps=config.generation.num_inference_steps,
-            guidance_scale=config.generation.guidance_scale,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
             scheduler=scheduler,
             unet=pipe.unet,
             vae=pipe.vae,
         )        
         
         init_prompt_embedding = get_text_embeddings(
-            prompt=config.generation.prompt,
+            prompt=config.prompt,
             batch_size=1,
             tokenizer=pipe.tokenizer,
             text_encoder=pipe.text_encoder,
@@ -153,7 +153,7 @@ def main(config: DictConfig) -> None:
             
     elif config.model.name == "sdxl-turbo":
         pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo")
-        pipe.to("cuda")
+        pipe.to(device)
         solution_schema = {
             "latent": (4, 64, 64),
             "prompt_embedding": (77, 2048),
@@ -162,19 +162,19 @@ def main(config: DictConfig) -> None:
         }
     
         generate_images_from_latents_fn = partial(generate_images_from_latents_sdxl_turbo,
-            num_inference_steps=1,
+            num_inference_steps=config.model.num_inference_steps,
             scheduler=pipe.scheduler,
             unet=pipe.unet,
             vae=pipe.vae,
         )
         
         init_prompt_embedding, init_pooled_prompt_embedding = get_sdxl_prompt_embeddings(
-            prompt=config.generation.prompt,
+            prompt=config.prompt,
             tokenizer_1=pipe.tokenizer,          
             tokenizer_2=pipe.tokenizer_2,
             text_encoder_1=pipe.text_encoder,    
             text_encoder_2=pipe.text_encoder_2,
-            device="cuda"
+            device=device
         )
 
         init_image = generate_images_from_latents_fn(
@@ -202,19 +202,14 @@ def main(config: DictConfig) -> None:
         
     # Load CLIP model for fitness calculations
     clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", dtype=torch.float32, cache_dir="/var/tmp/hf")
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to("cuda") # type: ignore
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to(device) # type: ignore
     
     # Set up scoring function
-    if config.algorithm.name == "map_elites":
-        project_desc = True
-    else:
-        project_desc = config.descriptor.project_desc
-    
     scoring_fn, descriptor_dim = get_scoring_function(
-        descriptor_name=config.descriptor.name,
-        project_desc=project_desc,
-        project_dim=config.descriptor.projection_dim,
-        prompt=config.generation.prompt,
+        descriptor_name=config.descriptor,
+        project_desc=config.algorithm.project_desc,
+        project_dim=config.algorithm.projection_dim,
+        prompt=config.prompt,
         clip_model=clip_model,
         clip_tokenizer=clip_tokenizer,
         generate_images_from_latents_fn=generate_images_from_latents_fn,
@@ -227,88 +222,72 @@ def main(config: DictConfig) -> None:
     # Set up MAP-Elites
     if config.algorithm.name == "map_elites":
         pass # TO DO
-
-    #     if config.algorithm.genotype == "embedding":
-    #         init_prompt_embeddings = toggle_prompt_embedding_shape(init_prompt_embeddings) # Convert to [batch_size, 2, 77, 768]
-    #         archive = GridArchive(
-    #             solution_dim=tuple(init_prompt_embeddings.shape[1:]), # ignore batch dimension
-    #             dims=config.algorithm.map_elites.grid_dims,
-    #             ranges=config.algorithm.map_elites.grid_ranges,
-    #             seed=config.algorithm.seed,
-    #         )
-    #     elif config.algorithm.genotype == "latent":
-    #         archive = GridArchive(
-    #             solution_dim=tuple(init_latents.shape[1:]), # ignore batch dimension
-    #             dims=config.algorithm.map_elites.grid_dims,
-    #             ranges=config.algorithm.map_elites.grid_ranges,
-    #             seed=config.algorithm.seed,
-    #         )
     
-    archive = DNSDictArchive(
-        solution_dim=solution_schema, # ignore batch dimension
-        measure_dim=descriptor_dim,
-        max_size=config.algorithm.max_pop_size,
-        fitness_threshold=config.algorithm.fitness_threshold,
-        k=config.algorithm.dns.k,
-        distance_metric=config.algorithm.dns.distance_metric,
-        seed=config.algorithm.seed,
-        dtype=np.float32,
-    )
+    elif config.algorithm.name == "dns":
+        archive = DNSDictArchive(
+            solution_dim=solution_schema, # ignore batch dimension
+            measure_dim=descriptor_dim,
+            max_size=config.max_pop_size,
+            fitness_threshold=config.fitness_threshold,
+            k=config.algorithm.k,
+            distance_metric=config.algorithm.distance_metric,
+            seed=config.seed,
+            dtype=np.float32,
+        )
      
     logger.warning("--- Setting up Emitter ---")
-    if config.emitter.name == "gaussian":
+    
+    if config.emitter.type == "gaussian":
         emitter = GaussianDictEmitter(
             archive=archive,
             initial_solution=initial_solution,
-            sigma=config.emitter.gaussian.latents_sigma,
-            batch_size=config.emitter.batch_size,
-            seed=config.algorithm.seed,
-            genotype_key=config.algorithm.genotype
+            sigma=config.emitter.sigma,
+            batch_size=config.batch_size,
+            seed=config.seed,
+            genotype_key=config.emitter.genotype
         )
-        del initial_solution
-        gc.collect()
             
-    elif config.emitter.name == "hidden_layer" and config.model.name == "sd-1-5":
+    elif config.emitter.type == "hidden_layer" and config.model.name == "sd-1-5":
         emitter = SDLatentEmitter(
                 archive=archive,
                 initial_solution=initial_solution,
                 unet=pipe.unet,
                 scheduler=scheduler,
-                batch_size=config.emitter.batch_size,
-                seed=config.algorithm.seed,
-                mutation_type=config.emitter.hidden_layer.mutation_type,
-                guidance_scale=config.generation.guidance_scale,
-                num_inference_steps=config.generation.num_inference_steps,
-                hook_proportion = config.emitter.hidden_layer.hook_proportion,
-                alpha_min=config.emitter.hidden_layer.alpha_min,
-                alpha_max=config.emitter.hidden_layer.alpha_max,
-                svd_k=config.emitter.hidden_layer.svd_k,
-                svd_iters=config.emitter.hidden_layer.svd_iters,
-                svd_fd_eps=config.emitter.hidden_layer.svd_fd_eps,
-                svd_layer=config.emitter.hidden_layer.svd_layer,
+                batch_size=config.batch_size,
+                seed=config.seed,
+                mutation_type=config.emitter.mutation_type,
+                guidance_scale=config.model.guidance_scale,
+                num_inference_steps=config.model.num_inference_steps,
+                hook_proportion = config.emitter.hook_proportion,
+                alpha_min=config.emitter.alpha_min,
+                alpha_max=config.emitter.alpha_max,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
                 device=device
         )   
     
-    elif config.emitter.name == "prompt_embedding" and config.model.name == "sd-1-5":
+    elif config.emitter.type == "prompt_embedding" and config.model.name == "sd-1-5":
         pass # TO DO
     
-    elif config.emitter.name == "hidden_layer" and config.model.name == "sdxl-turbo":
+    elif config.emitter.type == "hidden_layer" and config.model.name == "sdxl-turbo":
         emitter = SDXLHiddenLayerEmitter(
             archive=archive,
             initial_solution=initial_solution,
-            mutation_key=config.algorithm.genotype,
-            mutation_type=config.emitter.hidden_layer.mutation_type,
-            batch_size=config.emitter.batch_size,
+            mutation_key=config.emitter.genotype,
+            mutation_type=config.emitter.mutation_type,
+            batch_size=config.batch_size,
             unet=pipe.unet,
             scheduler=pipe.scheduler,
-            alpha_min=config.emitter.hidden_layer.alpha_min,
-            alpha_max=config.emitter.hidden_layer.alpha_max,
-            sigma=config.emitter.hidden_layer.sigma,
-            svd_k=config.emitter.hidden_layer.svd_k,
-            svd_iters=config.emitter.hidden_layer.svd_iters,
-            svd_fd_eps=config.emitter.hidden_layer.svd_fd_eps,
-            svd_layer=config.emitter.hidden_layer.svd_layer,
-            seed=config.algorithm.seed,  
+            alpha_min=config.emitter.alpha_min,
+            alpha_max=config.emitter.alpha_max,
+            sigma=config.emitter.sigma,
+            svd_k=config.emitter.svd_k,
+            svd_iters=config.emitter.svd_iters,
+            svd_fd_eps=config.emitter.svd_fd_eps,
+            svd_layer=config.emitter.svd_layer,
+            seed=config.seed,  
             device=device,  
         )
     
@@ -320,11 +299,11 @@ def main(config: DictConfig) -> None:
             
     if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":
         logger.warning("--- Algorithm initialisation ---")
-        for itr in range(1, config.algorithm.max_iterations + 1):
+        for itr in range(1, config.max_iterations + 1):
             solutions = scheduler.ask()
             
             fitnesses, descriptors, images = scoring_fn(solutions)
-            save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model.name)
+            save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
             scheduler.tell(fitnesses, descriptors, image=images)
             
             current_metrics = me_metrics_function(scheduler.archive, itr, config, config.ssim_sample_size)

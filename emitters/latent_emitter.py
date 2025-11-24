@@ -403,9 +403,13 @@ class SDLatentEmitter(EmitterBase):
             axis=0
         )
         
-        # Repeat any extra keys from schema (if they exist)
-        for key in self._solution_schema.keys():
-            if key not in ["latent", "prompt_embedding"]:
+        # [FIX] Iterate over seed keys to prevent accessing 'image'
+        # This mirrors the logic in your SDXL emitter.
+        for key in self._seed_sol.keys():
+            if key in ["latent", "prompt_embedding"]: 
+                continue # Already handled above
+            
+            if key in parent_sol:
                 parent_item = parent_sol[key]
                 final_batch[key] = np.repeat(
                     parent_item[np.newaxis, ...], 
