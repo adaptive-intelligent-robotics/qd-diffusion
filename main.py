@@ -17,6 +17,7 @@ from diffusers import (
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.latent_emitter import SDLatentEmitter
 from emitters.dict_scheduler import DictScheduler
+from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
 from functools import partial
 from image_utils import save_image
@@ -268,9 +269,6 @@ def main(config: DictConfig) -> None:
                 device=device
         )   
     
-    elif config.emitter.type == "prompt_embedding" and config.model.name == "sd-1-5":
-        pass # TO DO
-    
     elif config.emitter.type == "hidden_layer" and config.model.name == "sdxl-turbo":
         emitter = SDXLHiddenLayerEmitter(
             archive=archive,
@@ -290,7 +288,16 @@ def main(config: DictConfig) -> None:
             seed=config.seed,  
             device=device,  
         )
-    
+    elif config.emitter.type == "prompt_embedding" and config.model.name == "sd-1-5":
+        pass # TO DO
+
+    elif config.emitter.type == "random_seeds":
+        emitter = RandomSeedEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            batch_size=config.batch_size,
+            seed=config.seed,
+        )
 
     del initial_solution
     gc.collect()
