@@ -2,6 +2,7 @@ name: "sdxl-hidden-layer-prompt-embed-svd"
 type: "hidden_layer"
 genotype: "prompt_embedding"
 mutation_type: "svd"
+model_type: "sdxl-turbo"
 
 alpha_min: -20
 alpha_max: 20

@@ -2,6 +2,7 @@ name: "sdxl-hidden-layer-latent-svd"
 type: "hidden_layer"
 genotype: "latent"
 mutation_type: "svd"
+model_type: "sdxl-turbo"
 
 alpha_min: -20
 alpha_max: 20

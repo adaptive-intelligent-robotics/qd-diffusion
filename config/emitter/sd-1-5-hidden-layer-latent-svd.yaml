@@ -2,6 +2,7 @@ name: "sd-1-5-hidden-layer-latent-svd"
 type: "hidden_layer"
 genotype: "latent"
 mutation_type: "svd"
+model_type: "sd-1-5"
 
 alpha_min: -20
 alpha_max: 20

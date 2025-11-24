@@ -15,7 +15,7 @@ from diffusers import (
     StableDiffusionPipeline
 )
 from emitters.custom_gaussian import GaussianDictEmitter
-from emitters.latent_emitter import SDLatentEmitter
+from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.dict_scheduler import DictScheduler
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
@@ -249,19 +249,24 @@ def main(config: DictConfig) -> None:
         )
             
     elif config.emitter.type == "hidden_layer" and config.model.name == "sd-1-5":
-        emitter = SDLatentEmitter(
+        if config.emitter.model_type != "sd-1-5":
+            assert False, "Mismatch between emitter.model_type and model used"
+            
+        emitter = SDHiddenLayerEmitter(
                 archive=archive,
                 initial_solution=initial_solution,
+                mutation_key=config.emitter.genotype,
+                mutation_type=config.emitter.mutation_type,
                 unet=pipe.unet,
                 scheduler=scheduler,
                 batch_size=config.batch_size,
                 seed=config.seed,
-                mutation_type=config.emitter.mutation_type,
                 guidance_scale=config.model.guidance_scale,
                 num_inference_steps=config.model.num_inference_steps,
                 hook_proportion = config.emitter.hook_proportion,
                 alpha_min=config.emitter.alpha_min,
                 alpha_max=config.emitter.alpha_max,
+                sigma=config.emitter.sigma,
                 svd_k=config.emitter.svd_k,
                 svd_iters=config.emitter.svd_iters,
                 svd_fd_eps=config.emitter.svd_fd_eps,
@@ -270,6 +275,9 @@ def main(config: DictConfig) -> None:
         )   
     
     elif config.emitter.type == "hidden_layer" and config.model.name == "sdxl-turbo":
+        if config.emitter.model_type != "sdxl-turbo":
+            assert False, "Mismatch between emitter.model_type and model used"
+            
         emitter = SDXLHiddenLayerEmitter(
             archive=archive,
             initial_solution=initial_solution,

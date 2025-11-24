@@ -2,6 +2,7 @@ name: "sdxl-hidden-layer-latent-gaussian"
 type: "hidden_layer"
 genotype: "latent"
 mutation_type: "gaussian"
+model_type: "sdxl-turbo"
 
 sigma: 0.4
 svd_k: 10
