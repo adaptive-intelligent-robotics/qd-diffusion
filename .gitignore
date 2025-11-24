@@ -49,3 +49,6 @@ last_repertoire/
 # OS specific
 .DS_Store
 Thumbs.db 
+old_code/
+run_multiple.sh
+apptainer/var_tmp/
