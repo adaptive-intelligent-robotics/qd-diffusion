@@ -216,8 +216,8 @@ def plot_repertoire_images(
     generated_images_np = np.clip(generated_images_np, 0, 1)
     
     # Determine grid size
-    cols = math.ceil(np.sqrt(config.algorithm.max_pop_size))
-    rows = math.ceil(config.algorithm.max_pop_size / cols)
+    cols = math.ceil(np.sqrt(config.max_pop_size))
+    rows = math.ceil(config.max_pop_size / cols)
     
     # Create the figure
     fig, axes = plt.subplots(rows, cols, figsize=(cols, rows))  # adjust figsize for visibility
