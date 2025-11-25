@@ -57,4 +57,4 @@ From: ubuntu:22.04
 
 %runscript
 	# Run main
-	python /workspace/src/main.py "$@"pip f
+	python /workspace/src/main.py "$@"
