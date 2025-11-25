@@ -34,6 +34,7 @@ from model_utils import (
 )
 
 from omegaconf import DictConfig, OmegaConf
+from prompts import prompts_dict
 from repertoires.dns import DNSDictArchive
 from scoring_function import get_scoring_function
 from transformers import (
@@ -54,7 +55,6 @@ def main(config: DictConfig) -> None:
     logging.getLogger().handlers[0].setLevel(logging.INFO)
     logger = logging.getLogger(f"{__name__}")
 
-        
     # Debug logging for directories
     output_dir = hydra.core.hydra_config.HydraConfig.get().run.dir
     logger.warning(f"Hydra output directory: {output_dir}")
@@ -62,10 +62,17 @@ def main(config: DictConfig) -> None:
     # Create the output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
+    # Load in prompt
+    if config.prompt=="":
+        prompt = prompts_dict[config.prompt_key]
+    else:
+        prompt = config.prompt
+    
     # Initialise wandb
     wandb.init(
         project=f"Latent Exploration",
         name=f"{config.algorithm.name}",
+        tags=[prompt],
         config=OmegaConf.to_container(config, resolve=True),
         mode=config.wandb_mode,
     )
@@ -100,6 +107,8 @@ def main(config: DictConfig) -> None:
         header=list(metrics.keys())
     )
     
+    logger.warning(f"----- PROMPT: {prompt} -----")
+    
     # Set random seed for reproducibility
     generator = generator=torch.Generator(device=device).manual_seed(config.seed)
     torch.manual_seed(config.seed)
@@ -128,7 +137,7 @@ def main(config: DictConfig) -> None:
         )        
         
         init_prompt_embedding = get_text_embeddings(
-            prompt=config.prompt,
+            prompt=prompt,
             batch_size=1,
             tokenizer=pipe.tokenizer,
             text_encoder=pipe.text_encoder,
@@ -172,7 +181,7 @@ def main(config: DictConfig) -> None:
         )
         
         init_prompt_embedding, init_pooled_prompt_embedding = get_sdxl_prompt_embeddings(
-            prompt=config.prompt,
+            prompt=prompt,
             tokenizer_1=pipe.tokenizer,          
             tokenizer_2=pipe.tokenizer_2,
             text_encoder_1=pipe.text_encoder,    
@@ -212,7 +221,7 @@ def main(config: DictConfig) -> None:
         descriptor_name=config.descriptor,
         project_desc=config.algorithm.project_desc,
         project_dim=config.algorithm.projection_dim,
-        prompt=config.prompt,
+        prompt=prompt,
         clip_model=clip_model,
         clip_tokenizer=clip_tokenizer,
         generate_images_from_latents_fn=generate_images_from_latents_fn,

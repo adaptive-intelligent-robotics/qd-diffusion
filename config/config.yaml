@@ -1,6 +1,6 @@
 hydra:
     run:
-        dir: ${hydra:runtime.cwd}/output/${model.name}/${algorithm.name}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${seed}
+        dir: ${hydra:runtime.cwd}/output/${model.name}/${prompt_key}/${algorithm.name}/${emitter.name}/${now:%Y-%m-%d_%H%M%S}_${seed}
     output_subdir: .
 
 defaults:
@@ -10,7 +10,8 @@ defaults:
   - model: sdxl-turbo
 
 # Generation parameters
-prompt: "metal"
+prompt: ""
+prompt_key: 5
 seed: 42
 
 # General algorithm params
