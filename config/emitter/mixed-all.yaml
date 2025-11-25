@@ -1,2 +1,3 @@
 name: "mixed-all"
 type: "imagebreeder"
+genotype: "latent"

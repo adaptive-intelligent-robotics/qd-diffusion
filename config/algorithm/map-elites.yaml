@@ -1,0 +1,11 @@
+name: "map_elites"
+project_desc: False
+projection_dim: 2
+grid_dims: [16, 16] # how many cells per dimension
+grid_ranges:
+  - [-50.0, 50.0]
+  - [-50.0, 50.0]
+num_init_cvt_samples: 50000
+min_descriptor: -50.0
+max_descriptor: 50.0
+with_grad: False
