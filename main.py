@@ -67,12 +67,14 @@ def main(config: DictConfig) -> None:
         prompt = prompts_dict[config.prompt_key]
     else:
         prompt = config.prompt
+        
+    prompt_tag = prompt[:64]
     
     # Initialise wandb
     wandb.init(
         project=f"Latent Exploration",
         name=f"{config.algorithm.name}",
-        tags=[prompt],
+        tags=[prompt_tag],
         config=OmegaConf.to_container(config, resolve=True),
         mode=config.wandb_mode,
     )
