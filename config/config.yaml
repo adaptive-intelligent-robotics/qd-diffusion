@@ -24,8 +24,8 @@ fitness_threshold: 0.25  # -1 if we don't want to threshold
 descriptor: "dino-v2" # can be "dino-v2" or "dreamsim"
 
 # Saving params
-save_offspring_data: True
-save_images: True
+save_offspring_data: False
+save_images: False
 save_repertoire_period: 50
 ssim_sample_size: 500 # integer or -1 for full calculation
 wandb_mode: "online" # can be "online", "offline", or "disabled"
