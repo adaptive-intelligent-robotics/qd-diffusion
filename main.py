@@ -514,7 +514,7 @@ def main(config: DictConfig) -> None:
                     _images_dir
                     )
         
-        save_repertoire(archive, "final", _repertoire_dir)
+        save_repertoire(archive, "final", _repertoire_dir, config)
         plot_repertoire_images(
             archive,
             "final",
