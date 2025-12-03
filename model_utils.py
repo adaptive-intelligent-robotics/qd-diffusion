@@ -188,8 +188,10 @@ def save_repertoire(repertoire,
 ):  
     prompt_embeddings = repertoire.data()["solution"]["prompt_embedding"]
     latents = repertoire.data()["solution"]["latent"]
+    images = repertoire.data()["solution"]["image"] 
     torch.save(prompt_embeddings, os.path.join(save_dir, f"{itr}_prompt_embeddings.pt"))
     torch.save(latents, os.path.join(save_dir, f"{itr}_latents.pt"))
+    torch.save(images,  os.path.join(save_dir, f"{itr}_images.pt"))
     
     if config.model.name == "sdxl-turbo":
         pooled_prompt_embeddings = repertoire.data()["solution"]["pooled_prompt_embedding"]
