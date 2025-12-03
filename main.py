@@ -15,6 +15,7 @@ from diffusers import (
     StableDiffusionPipeline
 )
 from emitters.custom_gaussian import GaussianDictEmitter
+from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
@@ -290,6 +291,56 @@ def main(config: DictConfig) -> None:
                 archive=archive,
                 initial_solution=initial_solution,
                 sigma=config.emitter.pooled_prompt_embedding_sigma,
+                batch_size=batch_sizes[2],
+                seed=config.seed,
+                genotype_key="pooled_prompt_embedding"
+            )
+            emitters.append(emitter_3)
+    
+    elif config.emitter.type == "isoline":
+        emitter = IsoLineDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            iso_sigma=config.emitter.iso_sigma,
+            line_sigma=config.emitter.line_sigma,
+            batch_size=config.batch_size,
+            seed=config.seed,
+            genotype_key=config.emitter.genotype
+        )
+    
+    elif config.emitter.type == "multi-isoline":
+        if config.model.name == "sd-1-5":
+            batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
+        elif config.model.name == "sdxl-turbo":
+            batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
+        
+        emitter_1 = IsoLineDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            iso_sigma=config.emitter.latent_iso_sigma,
+            line_sigma=config.emitter.latent_line_sigma,
+            batch_size=batch_sizes[0],
+            seed=config.seed,
+            genotype_key="latent"
+        )
+        
+        emitter_2 = IsoLineDictEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            iso_sigma=config.emitter.prompt_embedding_iso_sigma,
+            line_sigma=config.emitter.prompt_embedding_line_sigma,
+            batch_size=batch_sizes[1],
+            seed=config.seed,
+            genotype_key="prompt_embedding"
+        )
+        emitters = [emitter_1, emitter_2]
+        
+        if config.model.name == "sdxl-turbo":
+            emitter_3 = IsoLineDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                iso_sigma=config.emitter.pooled_prompt_embedding_iso_sigma,
+                line_sigma=config.emitter.pooled_prompt_embedding_line_sigma,
                 batch_size=batch_sizes[2],
                 seed=config.seed,
                 genotype_key="pooled_prompt_embedding"

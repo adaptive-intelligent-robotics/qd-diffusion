@@ -1,0 +1,12 @@
+name: "multi-isoline"
+type: "multi-isoline"
+genotype: "multi"
+mutation_type: "isoline" 
+
+latent_iso_sigma: 0.4
+prompt_embedding_iso_sigma: 0.4
+pooled_prompt_embedding_iso_sigma: 0.4 #only used for SDXL
+
+latent_line_sigma: 0.1
+prompt_embedding_line_sigma: 0.1
+pooled_prompt_embedding_line_sigma: 0.1 #only used for SDXL
