@@ -469,6 +469,14 @@ def main(config: DictConfig) -> None:
         )
     
     elif config.emitter.type == "imagebreeder":
+        # Need to seed imagebreeder with 2 images to introduce variation
+        for k in initial_solution:
+            initial_solution[k] = initial_solution[k].repeat(2, *([1]*(initial_solution[k].ndim - 1)))
+            new_noise = torch.randn(1, 4, 64, 64, device=device, generator=generator)
+            if config.model.name == "sd-1-5":
+                new_noise = new_noise * scheduler.init_noise_sigma
+            initial_solution["latent"][1] = new_noise.cpu()
+        
         emitter = ImageBreederEmitter(
             archive=archive,
             initial_solution=initial_solution,

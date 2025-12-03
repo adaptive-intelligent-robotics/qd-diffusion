@@ -179,13 +179,38 @@ class ImageBreederEmitter(EmitterBase):
 
     def _get_parents(self):
         if self.archive.empty:
-            # Gen 0: Return seed as P1.
-            p1 = {k: np.repeat(v[np.newaxis, ...] if v.ndim == len(s) else v, self.batch_size, axis=0) 
-                  for k, v, s in zip(self._seed_sol.keys(), self._seed_sol.values(), self._solution_schema.values())}
-            # P2 same as P1
-            return p1, p1, None, None
-        
-        # Sample 2 separate batches
+            # Check if seed has at least 2 items
+            seed_batch_size = self._seed_sol["latent"].shape[0]
+            
+            p1_batch = {}
+            p2_batch = {}
+            
+            if seed_batch_size >= 2:
+                # We have 2+ seeds. Use Index 0 as P1, Index 1 as P2.
+                for k, v in self._seed_sol.items():
+                    # v is (Batch, C, H, W)
+                    item0 = v[0] # (C, H, W)
+                    item1 = v[1] # (C, H, W)
+                    
+                    # Expand to (1, C, H, W) then repeat to (BatchSize, ...)
+                    if item0.ndim == len(self._solution_schema[k]):
+                        item0 = item0[np.newaxis, ...]
+                        item1 = item1[np.newaxis, ...]
+                        
+                    p1_batch[k] = np.repeat(item0, self.batch_size, axis=0)
+                    p2_batch[k] = np.repeat(item1, self.batch_size, axis=0)
+            else:
+                # We only have 1 seed. P1 = Seed, P2 = Seed (Logic in ask() adds noise)
+                for k, v in self._seed_sol.items():
+                    item0 = v[0] if v.shape[0] == 1 else v
+                    if item0.ndim == len(self._solution_schema[k]):
+                        item0 = item0[np.newaxis, ...]
+                    
+                    p1_batch[k] = np.repeat(item0, self.batch_size, axis=0)
+                    p2_batch[k] = p1_batch[k].copy() # Identical parent
+
+            return p1_batch, p2_batch, None, None
+
         elites = self.archive.sample_elites(self.batch_size * 2)
         p1, p2 = {}, {}
         
