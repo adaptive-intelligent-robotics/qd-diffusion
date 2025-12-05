@@ -100,9 +100,11 @@ def main(config: DictConfig) -> None:
         "time",
         "evaluations",
         "avg_pairwise_dist",
-        "avg_dissimilarity_ssim",
         "total_variance",
-        "top_10_fitness_avg",
+        f"top_{config.top_k}_fitness_avg",
+        f"top_{config.top_k}_avg_pairwise_dist",
+        f"top_{config.top_k}_total_variance",
+        f"top_{config.top_k}_avg_dissimilarity_ssim",
     ], np.array([]))
     
     csv_logger = CSVLogger(
@@ -553,15 +555,15 @@ def main(config: DictConfig) -> None:
             save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
             scheduler.tell(fitnesses, descriptors, image=images)
             
-            current_metrics = me_metrics_function(scheduler.archive, itr, config, config.ssim_sample_size)
+            current_metrics = me_metrics_function(scheduler.archive, itr, config)
             wandb.log(current_metrics)
             csv_logger.log(current_metrics)
             logger.warning(f"--- ITERATION: {itr} ---")
-            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
             logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
-            logger.warning(f"Top 10 Avg Fitness: {current_metrics['top_10_fitness_avg']:.3f}")
-            logger.warning(f"SSIM Diversity: {current_metrics['avg_dissimilarity_ssim']:.3f}")
-            logger.warning(f"Avg Pairwise Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
+            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+            logger.warning(f"Avg Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
+            logger.warning(f"Top {config.top_k} Avg Fitness: {current_metrics[f'top_{config.top_k}_fitness_avg']:.3f}")
+            logger.warning(f"Top {config.top_k} Avg Descriptor Distance: {current_metrics[f'top_{config.top_k}_avg_pairwise_dist']:.3f}")
             
             if itr % config.save_repertoire_period == 0:
                 save_repertoire(archive, itr, _repertoire_dir, config)
