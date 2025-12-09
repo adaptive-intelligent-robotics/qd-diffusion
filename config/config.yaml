@@ -5,7 +5,7 @@ hydra:
 
 defaults:
   - _self_
-  - emitter: sdxl-hidden-layer-latent-svd
+  - emitter: multi-hidden-layer-svd
   - algorithm: dns
   - model: sdxl-turbo
 
