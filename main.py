@@ -234,8 +234,6 @@ def main(config: DictConfig) -> None:
     # Set up scoring function
     scoring_fn, descriptor_dim = get_scoring_function(
         descriptor_name=config.descriptor,
-        project_desc=config.algorithm.project_desc,
-        project_dim=config.algorithm.projection_dim,
         prompt=prompt,
         clip_model=clip_model,
         clip_tokenizer=clip_tokenizer,

@@ -77,8 +77,6 @@ def scoring_function(
 
 def get_scoring_function(
     descriptor_name,
-    project_desc,
-    project_dim,
     prompt,
     clip_model,
     clip_tokenizer,
@@ -90,8 +88,6 @@ def get_scoring_function(
     
     descriptor_fn, descriptor_dim = get_descriptor_fun(
         descriptor_name=descriptor_name,
-        project_desc=project_desc,
-        projection_dim=project_dim,
         generator=generator,
         save_dir=save_dir
     )

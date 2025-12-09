@@ -1,5 +1,3 @@
 name: "dns"
 k: 3
 distance_metric: "cosine"
-project_desc: False
-projection_dim: None
