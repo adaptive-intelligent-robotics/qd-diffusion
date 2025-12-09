@@ -3,7 +3,7 @@ type: "multi-isoline"
 genotype: "multi"
 mutation_type: "isoline" 
 
-latent_iso_sigma: 0.4
+latent_iso_sigma: 0.1
 prompt_embedding_iso_sigma: 0.4
 pooled_prompt_embedding_iso_sigma: 0.4 #only used for SDXL
 
