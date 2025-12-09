@@ -71,7 +71,7 @@ def me_metrics_function(
     # Need at least 2 elites for pairwise calc
     if num_elites < 2:
         # Return zeros for all pairwise/variance metrics
-        zeros = ["avg_pairwise_dist", "total_variance", "avg_dissimilarity_ssim", 
+        zeros = ["avg_pairwise_dist", "total_variance", f"top_{config.top_k}_avg_dissimilarity_ssim", 
                  f"top_{config.top_k}_avg_pairwise_dist", f"top_{config.top_k}_total_variance"]
         for key in zeros:
             current_metrics[key] = 0.0

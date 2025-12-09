@@ -44,6 +44,7 @@ from model_utils import (
 
 from omegaconf import DictConfig, OmegaConf
 from prompts import prompts_dict
+from repertoires.cvtme import CVTDictArchive
 from repertoires.dns import DNSDictArchive
 from scoring_function import get_scoring_function
 from transformers import (
@@ -244,9 +245,18 @@ def main(config: DictConfig) -> None:
     )
     
     logger.warning("--- Setting up Archive ---")
+    
     # Set up MAP-Elites
-    if config.algorithm.name == "map_elites":
-        pass # TO DO
+    if config.algorithm.name == "cvt-map-elites":
+        ranges = [[config.algorithm.min_descriptor, config.algorithm.max_descriptor] for _ in range(descriptor_dim)]
+        archive = CVTDictArchive(
+            solution_dim=solution_schema, # ignore batch dimension
+            cells=config.max_pop_size,
+            ranges=ranges,
+            samples=100*config.max_pop_size,
+            seed=config.seed,
+            dtype=np.float32,
+        )
     
     elif config.algorithm.name == "dns":
         archive = DNSDictArchive(
@@ -553,8 +563,8 @@ def main(config: DictConfig) -> None:
 
     del initial_solution
     gc.collect()
-            
-    if config.algorithm.name == "map_elites" or config.algorithm.name == "dns":
+
+    if config.algorithm.name == "cvt-map-elites" or config.algorithm.name == "dns":
         logger.warning("--- Algorithm initialisation ---")
         for itr in range(1, config.max_iterations + 1):
             solutions = scheduler.ask()

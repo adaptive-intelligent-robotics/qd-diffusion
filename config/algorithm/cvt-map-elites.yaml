@@ -1,0 +1,4 @@
+name: "cvt-map-elites"
+min_descriptor: -0.25
+max_descriptor: 0.25
+with_grad: False
