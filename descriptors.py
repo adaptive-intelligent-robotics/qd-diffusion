@@ -118,6 +118,7 @@ def get_descriptor_fun(
 
     elif descriptor_name == "dreamsim":
         dreamsim_dino_model, preprocess = dreamsim(pretrained=True, dreamsim_type="dino_vitb16")
+        dreamsim_dino_model.eval()
         if project_desc == True:
             projection_matrix = torch.randn(projection_dim, 768, device="cuda", generator=generator)
             torch.save(projection_matrix, f"{save_dir}/descriptor_projection_matrix.pt")

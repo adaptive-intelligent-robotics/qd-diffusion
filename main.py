@@ -1,19 +1,27 @@
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 import gc
 import hydra
 import logging
 import numpy as np
+import random
 import torch
 import wandb
-torch.cuda.empty_cache()
-
 from diffusers import (
     AutoPipelineForText2Image,
     DDIMScheduler,
     StableDiffusionPipeline
 )
+torch.cuda.empty_cache()
+
+# Make CUDA/cuDNN deterministic and disable TF32 for reproducibility
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+torch.backends.cuda.matmul.allow_tf32 = False
+# Enforce deterministic algorithms where supported; warn instead of raising if an op is not
+torch.use_deterministic_algorithms(True, warn_only=True)
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
@@ -119,6 +127,7 @@ def main(config: DictConfig) -> None:
     torch.manual_seed(config.seed)
     torch.cuda.manual_seed_all(config.seed)
     np.random.seed(config.seed)
+    random.seed(config.seed)
     
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
@@ -220,6 +229,7 @@ def main(config: DictConfig) -> None:
     # Load CLIP model for fitness calculations
     clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", dtype=torch.float32, cache_dir="/var/tmp/hf")
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to(device) # type: ignore
+    clip_model.eval()
     
     # Set up scoring function
     scoring_fn, descriptor_dim = get_scoring_function(
