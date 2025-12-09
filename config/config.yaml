@@ -21,7 +21,7 @@ max_iterations: 125
 fitness_threshold: 0.3  # -1 if we don't want to threshold
 
 # Descriptor Params
-descriptor: "dino-v2" # can be "dino-v2" or "dreamsim"
+descriptor: "dreamsim" # can be "dino-v2" or "dreamsim"
 
 # Saving params
 save_offspring_data: False
