@@ -1,9 +1,15 @@
-import torch
-from PIL import Image
+import gc
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import os
-import matplotlib.pyplot as plt
+import torch
+from diffusers import (
+    AutoPipelineForText2Image,
+    DDIMScheduler,
+    StableDiffusionPipeline
+)
+from functools import partial
 from image_utils import save_image
 
 def toggle_prompt_embedding_shape(embedding):
@@ -372,3 +378,106 @@ def generate_images_from_latents_sdxl_turbo(
             images = vae.decode(latents / scaling_factor).sample
 
     return images
+
+
+def setup_models(
+    config,
+    prompt,
+    init_latent,
+    initial_values_dir,
+    device,
+):
+    if config.model.name == "sd-1-5":
+        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to(device)
+        scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+        solution_schema = {
+            "latent": (4, 64, 64),
+            "prompt_embedding": (2, 77, 768),
+            "image": (3, 512, 512),
+        }
+        generate_images_from_latents_fn = partial(generate_images_from_latents,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            scheduler=scheduler,
+            unet=pipe.unet,
+            vae=pipe.vae,
+        )        
+        
+        init_prompt_embedding = get_text_embeddings(
+            prompt=prompt,
+            batch_size=1,
+            tokenizer=pipe.tokenizer,
+            text_encoder=pipe.text_encoder,
+            with_grad=False,
+        ) # [batch_size * 2, 77, 768]
+        init_latent *= scheduler.init_noise_sigma
+        init_image = generate_images_from_latents_fn(
+            latents=init_latent,
+            prompt_embedding=init_prompt_embedding
+        )
+        
+        # Save seed image, latent and prompt embedding
+        torch.save(init_prompt_embedding.cpu(), os.path.join(initial_values_dir, "initial_prompt_embedding.pt"))
+        torch.save(init_latent.cpu(), os.path.join(initial_values_dir, "initial_latent.pt"))
+        save_image(init_image[0], os.path.join(initial_values_dir, "initial_image.png"))
+        
+        # Create initial solution dict
+        initial_solution = {
+            "latent": init_latent.cpu(),
+            "prompt_embedding": init_prompt_embedding.cpu(),
+        }
+        
+        del init_image, init_latent, init_prompt_embedding
+        gc.collect()
+            
+    elif config.model.name == "sdxl-turbo":
+        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo")
+        pipe.to(device)
+        solution_schema = {
+            "latent": (4, 64, 64),
+            "prompt_embedding": (77, 2048),
+            "pooled_prompt_embedding": (1280,),
+            "image": (3, 512, 512),
+        }
+    
+        generate_images_from_latents_fn = partial(generate_images_from_latents_sdxl_turbo,
+            num_inference_steps=config.model.num_inference_steps,
+            scheduler=pipe.scheduler,
+            unet=pipe.unet,
+            vae=pipe.vae,
+        )
+        
+        init_prompt_embedding, init_pooled_prompt_embedding = get_sdxl_prompt_embeddings(
+            prompt=prompt,
+            tokenizer_1=pipe.tokenizer,          
+            tokenizer_2=pipe.tokenizer_2,
+            text_encoder_1=pipe.text_encoder,    
+            text_encoder_2=pipe.text_encoder_2,
+            device=device
+        )
+
+        init_image = generate_images_from_latents_fn(
+            latents=init_latent,
+            prompt_embedding=init_prompt_embedding,
+            pooled_prompt_embedding=init_pooled_prompt_embedding,
+            time_ids=[1024, 1024, 0, 0, 512, 512],
+        )
+        
+        # Save seed image, latent and prompt embedding
+        torch.save(init_prompt_embedding.cpu(), os.path.join(initial_values_dir, "initial_prompt_embedding.pt"))
+        torch.save(init_latent.cpu(), os.path.join(initial_values_dir, "initial_latent.pt"))
+        torch.save(init_pooled_prompt_embedding.cpu(), os.path.join(initial_values_dir, "initial_pooled_prompt_embedding.pt"))
+        save_image(init_image[0], os.path.join(initial_values_dir, "initial_image.png"))
+        
+        # Create initial solution dict
+        initial_solution = {
+            "latent": init_latent.cpu(),
+            "prompt_embedding": init_prompt_embedding.cpu(),
+            "pooled_prompt_embedding": init_pooled_prompt_embedding.cpu(),
+        }
+        
+        del init_image, init_latent, init_prompt_embedding, init_pooled_prompt_embedding    
+        gc.collect()
+        scheduler = None # already part of the pipeline object
+    
+    return pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution

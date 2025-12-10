@@ -9,11 +9,6 @@ import numpy as np
 import random
 import torch
 import wandb
-from diffusers import (
-    AutoPipelineForText2Image,
-    DDIMScheduler,
-    StableDiffusionPipeline
-)
 torch.cuda.empty_cache()
 
 # Make CUDA/cuDNN deterministic and disable TF32 for reproducibility
@@ -29,17 +24,12 @@ from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
-from functools import partial
-from image_utils import save_image
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
-    get_text_embeddings,
-    get_sdxl_prompt_embeddings,
-    generate_images_from_latents,
-    generate_images_from_latents_sdxl_turbo,
     plot_repertoire_images,
     save_offspring_data,
     save_repertoire,
+    setup_models,
 )
 
 from omegaconf import DictConfig, OmegaConf
@@ -135,98 +125,14 @@ def main(config: DictConfig) -> None:
     
     init_latent = torch.randn(1, 4, 64, 64, device=device, generator=generator)
         
-    if config.model.name == "sd-1-5":
-        pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to(device)
-        scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
-        solution_schema = {
-            "latent": (4, 64, 64),
-            "prompt_embedding": (2, 77, 768),
-            "image": (3, 512, 512),
-        }
-        generate_images_from_latents_fn = partial(generate_images_from_latents,
-            num_inference_steps=config.model.num_inference_steps,
-            guidance_scale=config.model.guidance_scale,
-            scheduler=scheduler,
-            unet=pipe.unet,
-            vae=pipe.vae,
-        )        
-        
-        init_prompt_embedding = get_text_embeddings(
-            prompt=prompt,
-            batch_size=1,
-            tokenizer=pipe.tokenizer,
-            text_encoder=pipe.text_encoder,
-            with_grad=False,
-        ) # [batch_size * 2, 77, 768]
-        init_latent *= scheduler.init_noise_sigma
-        init_image = generate_images_from_latents_fn(
-            latents=init_latent,
-            prompt_embedding=init_prompt_embedding
-        )
-        
-        # Save seed image, latent and prompt embedding
-        torch.save(init_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embedding.pt"))
-        torch.save(init_latent.cpu(), os.path.join(_initial_values_dir, "initial_latent.pt"))
-        save_image(init_image[0], os.path.join(_initial_values_dir, "initial_image.png"))
-        
-        # Create initial solution dict
-        initial_solution = {
-            "latent": init_latent.cpu(),
-            "prompt_embedding": init_prompt_embedding.cpu(),
-        }
-        
-        del init_image, init_latent, init_prompt_embedding
-        gc.collect()
-            
-    elif config.model.name == "sdxl-turbo":
-        pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo")
-        pipe.to(device)
-        solution_schema = {
-            "latent": (4, 64, 64),
-            "prompt_embedding": (77, 2048),
-            "pooled_prompt_embedding": (1280,),
-            "image": (3, 512, 512),
-        }
+    pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution = setup_models(
+        config,
+        prompt,
+        init_latent,
+        _initial_values_dir,
+        device,
+    )   
     
-        generate_images_from_latents_fn = partial(generate_images_from_latents_sdxl_turbo,
-            num_inference_steps=config.model.num_inference_steps,
-            scheduler=pipe.scheduler,
-            unet=pipe.unet,
-            vae=pipe.vae,
-        )
-        
-        init_prompt_embedding, init_pooled_prompt_embedding = get_sdxl_prompt_embeddings(
-            prompt=prompt,
-            tokenizer_1=pipe.tokenizer,          
-            tokenizer_2=pipe.tokenizer_2,
-            text_encoder_1=pipe.text_encoder,    
-            text_encoder_2=pipe.text_encoder_2,
-            device=device
-        )
-
-        init_image = generate_images_from_latents_fn(
-            latents=init_latent,
-            prompt_embedding=init_prompt_embedding,
-            pooled_prompt_embedding=init_pooled_prompt_embedding,
-            time_ids=[1024, 1024, 0, 0, 512, 512],
-        )
-        
-        # Save seed image, latent and prompt embedding
-        torch.save(init_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_prompt_embedding.pt"))
-        torch.save(init_latent.cpu(), os.path.join(_initial_values_dir, "initial_latent.pt"))
-        torch.save(init_pooled_prompt_embedding.cpu(), os.path.join(_initial_values_dir, "initial_pooled_prompt_embedding.pt"))
-        save_image(init_image[0], os.path.join(_initial_values_dir, "initial_image.png"))
-        
-        # Create initial solution dict
-        initial_solution = {
-            "latent": init_latent.cpu(),
-            "prompt_embedding": init_prompt_embedding.cpu(),
-            "pooled_prompt_embedding": init_pooled_prompt_embedding.cpu(),
-        }
-        
-        del init_image, init_latent, init_prompt_embedding, init_pooled_prompt_embedding    
-        gc.collect()
-        
     # Load CLIP model for fitness calculations
     clip_tokenizer = CLIPTokenizerFast.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="tokenizer", dtype=torch.float32, cache_dir="/var/tmp/hf")
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", use_safetensors=True, cache_dir="/var/tmp/hf").to(device) # type: ignore
