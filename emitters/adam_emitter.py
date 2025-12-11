@@ -217,34 +217,23 @@ def prepare_adam_loss_fn(
             raise ValueError(f"Unsupported genotype '{genotype}' for SD-1.5 Adam emitter.")
 
     elif config.model.name == "sdxl-turbo":
+        
         # Prepare fixed embeddings/latents and time_ids
         latents_init = torch.tensor(np.array(initial_solution["latent"]), device=device, dtype=pipe.unet.dtype)
-        if latents_init.ndim == 3:
-            latents_init = latents_init.unsqueeze(0)
-        latents_init = latents_init.repeat(config.batch_size, 1, 1, 1)
-
         prompt_embeds_init = torch.tensor(np.array(initial_solution["prompt_embedding"]), device=device, dtype=pipe.unet.dtype)
-        if prompt_embeds_init.ndim == 2:
-            prompt_embeds_init = prompt_embeds_init.unsqueeze(0)
-        prompt_embeds_init = prompt_embeds_init.repeat(config.batch_size, 1, 1)
-
         pooled_embeds_init = torch.tensor(np.array(initial_solution["pooled_prompt_embedding"]), device=device, dtype=pipe.unet.dtype)
-        if pooled_embeds_init.ndim == 1:
-            pooled_embeds_init = pooled_embeds_init.unsqueeze(0)
-        pooled_embeds_init = pooled_embeds_init.repeat(config.batch_size, 1)
 
-        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * config.batch_size, device=device, dtype=pipe.unet.dtype)
+        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]], device=device, dtype=pipe.unet.dtype)
 
         # Define loss function based on mutation key
         if genotype == "latent":
             
             def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
-                batch_sz = genotypes.shape[0]
                 generated_images = generate_images_from_latents_sdxl_turbo(
                     latents=genotypes,
-                    prompt_embedding=prompt_embeds_init[:batch_sz],
-                    pooled_prompt_embedding=pooled_embeds_init[:batch_sz],
-                    time_ids=time_ids[:batch_sz],
+                    prompt_embedding=prompt_embeds_init,
+                    pooled_prompt_embedding=pooled_embeds_init,
+                    time_ids=time_ids,
                     num_inference_steps=config.model.num_inference_steps,
                     scheduler=pipe.scheduler,
                     unet=pipe.unet,
@@ -263,12 +252,11 @@ def prepare_adam_loss_fn(
 
         elif genotype == "prompt_embedding":
             def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
-                batch_sz = genotypes.shape[0]
                 generated_images = generate_images_from_latents_sdxl_turbo(
-                    latents=latents_init[:batch_sz],
+                    latents=latents_init,
                     prompt_embedding=genotypes,
-                    pooled_prompt_embedding=pooled_embeds_init[:batch_sz],
-                    time_ids=time_ids[:batch_sz],
+                    pooled_prompt_embedding=pooled_embeds_init,
+                    time_ids=time_ids,
                     num_inference_steps=config.model.num_inference_steps,
                     scheduler=pipe.scheduler,
                     unet=pipe.unet,
@@ -287,12 +275,11 @@ def prepare_adam_loss_fn(
 
         elif genotype == "pooled_prompt_embedding":
             def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
-                batch_sz = genotypes.shape[0]
                 generated_images = generate_images_from_latents_sdxl_turbo(
-                    latents=latents_init[:batch_sz],
-                    prompt_embedding=prompt_embeds_init[:batch_sz],
+                    latents=latents_init,
+                    prompt_embedding=prompt_embeds_init,
                     pooled_prompt_embedding=genotypes,
-                    time_ids=time_ids[:batch_sz],
+                    time_ids=time_ids,
                     num_inference_steps=config.model.num_inference_steps,
                     scheduler=pipe.scheduler,
                     unet=pipe.unet,
