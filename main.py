@@ -17,6 +17,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cuda.matmul.allow_tf32 = False
 # Enforce deterministic algorithms where supported; warn instead of raising if an op is not
 torch.use_deterministic_algorithms(True, warn_only=True)
+from emitters.adam_emitter import AdamDictEmitter, prepare_adam_loss_fn
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
@@ -36,6 +37,7 @@ from omegaconf import DictConfig, OmegaConf
 from prompts import prompts_dict
 from repertoires.cvtme import CVTDictArchive
 from repertoires.dns import DNSDictArchive
+from repertoires.passive_population import PassivePopulationArchive
 from scoring_function import get_scoring_function
 from transformers import (
     CLIPModel,
@@ -149,7 +151,15 @@ def main(config: DictConfig) -> None:
         model_name=config.model.name,
         save_dir=_initial_values_dir,
     )
-    
+    # Calculate batch sizes for multi-emitters
+    if config.emitter.genotype == "multi":
+        if config.model.name == "sd-1-5":
+            batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
+        elif config.model.name == "sdxl-turbo":
+            batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
+    else:
+        batch_sizes = [config.batch_size]
+        
     logger.warning("--- Setting up Archive ---")
     
     # Set up MAP-Elites
@@ -188,10 +198,6 @@ def main(config: DictConfig) -> None:
             genotype_key=config.emitter.genotype
         )
     elif config.emitter.type == "multi-gaussian":
-        if config.model.name == "sd-1-5":
-            batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
-        elif config.model.name == "sdxl-turbo":
-            batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
         
         emitter_1 = GaussianDictEmitter(
             archive=archive,
@@ -235,11 +241,6 @@ def main(config: DictConfig) -> None:
         )
     
     elif config.emitter.type == "multi-isoline":
-        if config.model.name == "sd-1-5":
-            batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
-        elif config.model.name == "sdxl-turbo":
-            batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
-        
         emitter_1 = IsoLineDictEmitter(
             archive=archive,
             initial_solution=initial_solution,
@@ -434,9 +435,6 @@ def main(config: DictConfig) -> None:
             )
             emitters = [emitter_1, emitter_2, emitter_3]
             
-    elif config.emitter.type == "prompt_embedding" and config.model.name == "sd-1-5":
-        pass # TO DO
-
     elif config.emitter.type == "random_seeds":
         emitter = RandomSeedEmitter(
             archive=archive,
@@ -461,6 +459,141 @@ def main(config: DictConfig) -> None:
             batch_size=config.batch_size,
             seed=config.seed
         )
+        
+    elif config.emitter.type == "adam":
+        archive = PassivePopulationArchive( # overwrite DNS archive
+            solution_dim=solution_schema,
+            measure_dim=descriptor_dim,
+            population_size=config.batch_size,
+            seed=config.seed,
+            dtype=np.float32,
+            batch_sizes=batch_sizes,
+        )
+        
+        # Second archive to track what would be added to DNS if we kept all solutions
+        passive_dns_archive = DNSDictArchive(
+            solution_dim=solution_schema,
+            measure_dim=descriptor_dim,
+            max_size=config.max_pop_size,
+            fitness_threshold=config.fitness_threshold,
+            k=config.algorithm.k,
+            distance_metric=config.algorithm.distance_metric,
+            seed=config.seed,
+            dtype=np.float32,
+        )
+        
+        # Enable gradient checkpointing to reduce memory usage
+        pipe.unet.enable_gradient_checkpointing()
+        if hasattr(pipe.vae, 'enable_gradient_checkpointing'):
+            pipe.vae.enable_gradient_checkpointing()
+            
+        if config.emitter.genotype != "multi":
+            adam_loss_fn = prepare_adam_loss_fn(
+                config,
+                config.emitter.genotype,
+                prompt,
+                initial_solution,
+                pipe,
+                scheduler,
+                clip_model,
+                clip_tokenizer,
+                device
+            )
+            emitter = AdamDictEmitter( # TO DO: add setup for this
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key=config.emitter.genotype,
+                loss_fn=adam_loss_fn,
+                batch_size=config.batch_size,
+                lr=config.emitter.learning_rate,
+                steps=config.emitter.steps,
+                noise_sigma=config.emitter.noise_sigma,
+                micro_batch_size=config.emitter.gradient_batch_size,
+                device=device,
+                seed=config.seed,
+                emitter_id=0,
+            )
+            
+        else:
+            adam_loss_fn_1 = prepare_adam_loss_fn(
+                config,
+                "latent",
+                prompt,
+                initial_solution,
+                pipe,
+                scheduler,
+                clip_model,
+                clip_tokenizer,
+                device
+            )
+            adam_loss_fn_2 = prepare_adam_loss_fn(
+                config,
+                "prompt_embedding",
+                prompt,
+                initial_solution,
+                pipe,
+                scheduler,
+                clip_model,
+                clip_tokenizer,
+                device,
+            )
+            emitter_1 = AdamDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="latent",
+                loss_fn=adam_loss_fn_1,
+                batch_size=batch_sizes[0],
+                lr=config.emitter.learning_rate,
+                steps=config.emitter.steps,
+                noise_sigma=config.emitter.latent_noise_sigma,
+                micro_batch_size=config.emitter.gradient_batch_size,
+                device=device,
+                seed=config.seed,
+                emitter_id=0,
+            )
+            emitter_2 = AdamDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="prompt_embedding",
+                loss_fn=adam_loss_fn_2,
+                batch_size=batch_sizes[1],
+                lr=config.emitter.learning_rate,
+                steps=config.emitter.steps,
+                noise_sigma=config.emitter.prompt_embedding_noise_sigma,
+                micro_batch_size=config.emitter.gradient_batch_size,
+                device=device,
+                seed=config.seed,
+                emitter_id=1,
+            )
+            emitters = [emitter_1, emitter_2]
+            
+            if config.model.name == "sdxl-turbo":
+                adam_loss_fn_3 = prepare_adam_loss_fn(
+                    config,
+                    "pooled_prompt_embedding",
+                    prompt,
+                    initial_solution,
+                    pipe,
+                    scheduler,
+                    clip_model,
+                    clip_tokenizer,
+                    device
+                )
+                emitter_3 = AdamDictEmitter(
+                    archive=archive,
+                    initial_solution=initial_solution,
+                    mutation_key="pooled_prompt_embedding",
+                    loss_fn=adam_loss_fn_3,
+                    batch_size=batch_sizes[2],
+                    lr=config.emitter.learning_rate,
+                    steps=config.emitter.steps,
+                    noise_sigma=config.emitter.pooled_prompt_embedding_noise_sigma,
+                    micro_batch_size=config.emitter.gradient_batch_size,
+                    device=device,
+                    seed=config.seed,
+                    emitter_id=2,
+                )
+                emitters.append(emitter_3)
     
     if config.emitter.genotype != "multi":
         scheduler = DictScheduler(archive, [emitter])
@@ -470,26 +603,47 @@ def main(config: DictConfig) -> None:
     del initial_solution
     gc.collect()
 
-    if config.algorithm.name == "cvt-map-elites" or config.algorithm.name == "dns":
-        logger.warning("--- Algorithm initialisation ---")
-        for itr in range(1, config.max_iterations + 1):
-            solutions = scheduler.ask()
+    logger.warning("--- Algorithm initialisation ---")
+    for itr in range(1, config.max_iterations + 1):
+        solutions = scheduler.ask()
+        
+        fitnesses, descriptors, images = scoring_fn(solutions)
+        save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
+        scheduler.tell(fitnesses, descriptors, image=images)
+        
+        if config.emitter.type == "adam":
+            solutions_to_add = solutions.copy()
+            solutions_to_add["image"] = images.detach().cpu().numpy()  # Add images to solutions dict
+            passive_dns_archive.add(
+                    solutions_to_add, 
+                    fitnesses, 
+                    descriptors
+            )
+            current_metrics = me_metrics_function(passive_dns_archive, itr, config)
             
-            fitnesses, descriptors, images = scoring_fn(solutions)
-            save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
-            scheduler.tell(fitnesses, descriptors, image=images)
-            
+        else:
             current_metrics = me_metrics_function(scheduler.archive, itr, config)
-            wandb.log(current_metrics)
-            csv_logger.log(current_metrics)
-            logger.warning(f"--- ITERATION: {itr} ---")
-            logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
-            logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
-            logger.warning(f"Avg Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
-            logger.warning(f"Top {config.top_k} Avg Fitness: {current_metrics[f'top_{config.top_k}_fitness_avg']:.3f}")
-            logger.warning(f"Top {config.top_k} Avg Descriptor Distance: {current_metrics[f'top_{config.top_k}_avg_pairwise_dist']:.3f}")
             
-            if itr % config.save_repertoire_period == 0:
+        wandb.log(current_metrics)
+        csv_logger.log(current_metrics)
+        logger.warning(f"--- ITERATION: {itr} ---")
+        logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
+        logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
+        logger.warning(f"Avg Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
+        logger.warning(f"Top {config.top_k} Avg Fitness: {current_metrics[f'top_{config.top_k}_fitness_avg']:.3f}")
+        logger.warning(f"Top {config.top_k} Avg Descriptor Distance: {current_metrics[f'top_{config.top_k}_avg_pairwise_dist']:.3f}")
+        
+        if itr % config.save_repertoire_period == 0:
+            if config.emitter.type == "adam":
+                save_repertoire(passive_dns_archive, itr, _repertoire_dir, config)
+                plot_repertoire_images(
+                    passive_dns_archive,
+                    itr,
+                    config,
+                    generate_images_from_latents_fn,
+                    _images_dir
+                    )
+            else:
                 save_repertoire(archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(
                     archive,
@@ -498,7 +652,17 @@ def main(config: DictConfig) -> None:
                     generate_images_from_latents_fn,
                     _images_dir
                     )
-        
+    
+    if config.emitter.type == "adam":
+        save_repertoire(passive_dns_archive, "final", _repertoire_dir, config)
+        plot_repertoire_images(
+            passive_dns_archive,
+            "final",
+            config,
+            generate_images_from_latents_fn,
+            _images_dir
+            )
+    else:
         save_repertoire(archive, "final", _repertoire_dir, config)
         plot_repertoire_images(
             archive,

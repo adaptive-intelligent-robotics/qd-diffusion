@@ -1,0 +1,297 @@
+import numpy as np
+import torch
+from functools import partial
+from scoring_function import fitness_function
+from model_utils import (
+    generate_images_from_latents,
+    generate_images_from_latents_sdxl_turbo,
+    expand_prompt_embedding,
+)
+from ribs.emitters._emitter_base import EmitterBase
+from typing import Callable, Dict, Optional
+
+
+class AdamDictEmitter(EmitterBase):
+    """
+    Gradient-based emitter that optimizes a selected genotype key with Adam.
+
+    - Works with dictionary solutions (same schema as DNS/CVT archives).
+    - Uses a provided PyTorch loss_fn that returns a scalar given a batch tensor.
+    - Other genotype keys are broadcast/copied from the parent batch.
+    """
+
+    def __init__(
+        self,
+        archive,
+        *,
+        initial_solution: Dict[str, np.ndarray],
+        mutation_key: str,
+        loss_fn: Callable[[torch.Tensor], torch.Tensor],
+        batch_size: int,
+        lr: float = 1e-3,
+        steps: int = 1,
+        noise_sigma: float = 0.0,
+        micro_batch_size: Optional[int] = None,
+        device: str = "cuda",
+        seed: Optional[int] = None,
+        bounds=None,
+        emitter_id: int = 0,
+    ):
+        self._solution_schema = archive.solution_dim
+        super().__init__(archive=archive, solution_dim=(), bounds=bounds)
+
+        if initial_solution is None:
+            raise ValueError("initial_solution must be provided.")
+        if mutation_key not in initial_solution:
+            raise ValueError(f"mutation_key '{mutation_key}' not in initial_solution")
+
+        # Store seed solution as numpy for deterministic replay
+        self._seed_sol = {}
+        for k, v in initial_solution.items():
+            if isinstance(v, torch.Tensor):
+                self._seed_sol[k] = v.detach().cpu().numpy()
+            else:
+                self._seed_sol[k] = np.array(v)
+
+        self.mutation_key = mutation_key
+        self.loss_fn = loss_fn
+        self.batch_size = batch_size
+        self.lr = lr
+        self.steps = steps
+        self.noise_sigma = noise_sigma
+        self.micro_batch_size = micro_batch_size if micro_batch_size is not None else min(batch_size, 4)
+        self._device = device
+        self._emitter_id = emitter_id
+
+        self._rng = np.random.default_rng(seed)
+        self._torch_dtype = torch.float32
+        self._iteration = 0  # Track iteration for first-iteration-only noise
+
+    # ------------------------------------------------------------------
+    def _broadcast_parent(self, parent_batch: np.ndarray, target_shape: tuple):
+        """Ensure parent_batch has leading batch dim == batch_size."""
+        arr = parent_batch
+        if arr.ndim == len(target_shape):
+            arr = arr[np.newaxis, ...]
+        if arr.shape[0] < self.batch_size:
+            reps = [self.batch_size] + [1] * (arr.ndim - 1)
+            arr = np.repeat(arr, reps[0], axis=0)
+        return arr.astype(np.float32)
+
+    # ------------------------------------------------------------------
+    def ask(self):
+        # Increment iteration counter
+        self._iteration += 1
+        
+        # Only add noise on the first iteration
+        add_noise = (self._iteration == 1)
+
+        # 1) Select parents
+        if self.archive.empty:
+            parent_sol = {}
+            for k, v in self._seed_sol.items():
+                target_shape = (self.batch_size, *self._solution_schema[k])
+                parent_sol[k] = self._broadcast_parent(v, self._solution_schema[k])
+        else:
+            sampled = self.archive.sample_elites(self._emitter_id)["solution"]
+            parent_sol = {}
+            for k, v in sampled.items():
+                target_shape = (self.batch_size, *self._solution_schema[k])
+                parent_sol[k] = self._broadcast_parent(v, self._solution_schema[k])
+
+        start_np = parent_sol[self.mutation_key]
+        
+        # Add noise only on the first iteration
+        if add_noise and self.noise_sigma > 0:
+            start_np = start_np + self._rng.normal(scale=self.noise_sigma, size=start_np.shape).astype(start_np.dtype)
+
+        param = torch.nn.Parameter(
+            torch.tensor(start_np, device=self._device, dtype=self._torch_dtype, requires_grad=True)
+        )
+        optim = torch.optim.Adam([param], lr=self.lr)
+
+        # 3) Gradient steps with gradient accumulation
+        for _ in range(self.steps):
+            optim.zero_grad()
+            
+            # Process in micro-batches to reduce memory usage
+            total_loss = 0.0
+            num_micro_batches = (self.batch_size + self.micro_batch_size - 1) // self.micro_batch_size
+            
+            for micro_idx in range(num_micro_batches):
+                start_idx = micro_idx * self.micro_batch_size
+                end_idx = min(start_idx + self.micro_batch_size, self.batch_size)
+                
+                # Extract micro-batch
+                micro_param = param[start_idx:end_idx]
+                
+                # Compute loss for micro-batch
+                micro_loss = self.loss_fn(micro_param)
+                if micro_loss.dim() != 0:
+                    micro_loss = micro_loss.mean()
+                
+                # Scale loss by micro-batch size for proper averaging
+                scaled_loss = micro_loss * (end_idx - start_idx) / self.batch_size
+                scaled_loss.backward()
+                
+                total_loss += micro_loss.item() * (end_idx - start_idx) / self.batch_size
+            
+            optim.step()
+
+        updated_np = param.detach().cpu().numpy()
+
+        # 4) Build children dict
+        children = {}
+        for k, v in parent_sol.items():
+            if k == self.mutation_key:
+                children[k] = updated_np
+            else:
+                children[k] = v
+        
+        del total_loss, param, optim  # Free memory
+        torch.cuda.empty_cache()
+
+        return children
+
+    def tell(self, solution, objective, measures, add_info, **fields):
+        # Adam emitter does not need feedback to update internal state
+        return None
+
+
+
+def prepare_adam_loss_fn(
+    config,
+    genotype,
+    prompt,
+    initial_solution,
+    pipe,
+    scheduler,
+    clip_model,
+    clip_tokenizer,
+    device,
+):
+    if config.model.name == "sd-1-5":
+        # Prepare prompt embeddings for batch with grad
+        expanded_prompt_embedding = expand_prompt_embedding(initial_solution["prompt_embedding"], config.batch_size)
+
+        generate_images_from_latents_with_grad_fn = partial(
+            generate_images_from_latents,
+            prompt_embedding=expanded_prompt_embedding,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            scheduler=scheduler,
+            unet=pipe.unet,
+            vae=pipe.vae,
+            with_grad=True,
+        )
+
+        def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+            generated_images = generate_images_from_latents_with_grad_fn(genotypes)
+            fitnesses = fitness_function(
+                generated_images=generated_images,
+                prompt=prompt,
+                clip_model=clip_model,
+                clip_tokenizer=clip_tokenizer,
+                with_grad=True,
+            )
+            return -fitnesses.mean()
+
+    elif config.model.name == "sdxl-turbo":
+        # Prepare fixed embeddings/latents and time_ids
+        latents_init = torch.tensor(np.array(initial_solution["latent"]), device=device, dtype=pipe.unet.dtype)
+        if latents_init.ndim == 3:
+            latents_init = latents_init.unsqueeze(0)
+        latents_init = latents_init.repeat(config.batch_size, 1, 1, 1)
+
+        prompt_embeds_init = torch.tensor(np.array(initial_solution["prompt_embedding"]), device=device, dtype=pipe.unet.dtype)
+        if prompt_embeds_init.ndim == 2:
+            prompt_embeds_init = prompt_embeds_init.unsqueeze(0)
+        prompt_embeds_init = prompt_embeds_init.repeat(config.batch_size, 1, 1)
+
+        pooled_embeds_init = torch.tensor(np.array(initial_solution["pooled_prompt_embedding"]), device=device, dtype=pipe.unet.dtype)
+        if pooled_embeds_init.ndim == 1:
+            pooled_embeds_init = pooled_embeds_init.unsqueeze(0)
+        pooled_embeds_init = pooled_embeds_init.repeat(config.batch_size, 1)
+
+        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * config.batch_size, device=device, dtype=pipe.unet.dtype)
+
+        # Define loss function based on mutation key
+        if genotype == "latent":
+            
+            def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+                batch_sz = genotypes.shape[0]
+                generated_images = generate_images_from_latents_sdxl_turbo(
+                    latents=genotypes,
+                    prompt_embedding=prompt_embeds_init[:batch_sz],
+                    pooled_prompt_embedding=pooled_embeds_init[:batch_sz],
+                    time_ids=time_ids[:batch_sz],
+                    num_inference_steps=config.model.num_inference_steps,
+                    scheduler=pipe.scheduler,
+                    unet=pipe.unet,
+                    vae=pipe.vae,
+                    with_grad=True,
+                    device=device,
+                )
+                fitnesses = fitness_function(
+                    generated_images=generated_images,
+                    prompt=prompt,
+                    clip_model=clip_model,
+                    clip_tokenizer=clip_tokenizer,
+                    with_grad=True,
+                )
+                return -fitnesses.mean()
+
+        elif genotype == "prompt_embedding":
+            def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+                batch_sz = genotypes.shape[0]
+                generated_images = generate_images_from_latents_sdxl_turbo(
+                    latents=latents_init[:batch_sz],
+                    prompt_embedding=genotypes,
+                    pooled_prompt_embedding=pooled_embeds_init[:batch_sz],
+                    time_ids=time_ids[:batch_sz],
+                    num_inference_steps=config.model.num_inference_steps,
+                    scheduler=pipe.scheduler,
+                    unet=pipe.unet,
+                    vae=pipe.vae,
+                    with_grad=True,
+                    device=device,
+                )
+                fitnesses = fitness_function(
+                    generated_images=generated_images,
+                    prompt=prompt,
+                    clip_model=clip_model,
+                    clip_tokenizer=clip_tokenizer,
+                    with_grad=True,
+                )
+                return -fitnesses.mean()
+
+        elif genotype == "pooled_prompt_embedding":
+            def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+                batch_sz = genotypes.shape[0]
+                generated_images = generate_images_from_latents_sdxl_turbo(
+                    latents=latents_init[:batch_sz],
+                    prompt_embedding=prompt_embeds_init[:batch_sz],
+                    pooled_prompt_embedding=genotypes,
+                    time_ids=time_ids[:batch_sz],
+                    num_inference_steps=config.model.num_inference_steps,
+                    scheduler=pipe.scheduler,
+                    unet=pipe.unet,
+                    vae=pipe.vae,
+                    with_grad=True,
+                    device=device,
+                )
+                fitnesses = fitness_function(
+                    generated_images=generated_images,
+                    prompt=prompt,
+                    clip_model=clip_model,
+                    clip_tokenizer=clip_tokenizer,
+                    with_grad=True,
+                )
+                return -fitnesses.mean()
+        else:
+            raise ValueError(f"Unsupported genotype '{genotype}' for SDXL-Turbo Adam emitter.")
+
+    else:
+        raise NotImplementedError(f"Adam emitter not supported for model {config.model.name}.")
+    
+    return adam_loss_fn

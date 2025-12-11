@@ -1,5 +1,0 @@
-name: "adam"
-learning_rate: 0.05
-max_iterations: 1000
-batch_size: 1
-with_grad: True
