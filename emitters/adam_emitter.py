@@ -159,30 +159,62 @@ def prepare_adam_loss_fn(
     device,
 ):
     if config.model.name == "sd-1-5":
-        # Prepare prompt embeddings for batch with grad
-        expanded_prompt_embedding = expand_prompt_embedding(initial_solution["prompt_embedding"], config.batch_size)
-
-        generate_images_from_latents_with_grad_fn = partial(
-            generate_images_from_latents,
-            prompt_embedding=expanded_prompt_embedding,
-            num_inference_steps=config.model.num_inference_steps,
-            guidance_scale=config.model.guidance_scale,
-            scheduler=scheduler,
-            unet=pipe.unet,
-            vae=pipe.vae,
-            with_grad=True,
-        )
-
-        def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
-            generated_images = generate_images_from_latents_with_grad_fn(genotypes)
-            fitnesses = fitness_function(
-                generated_images=generated_images,
-                prompt=prompt,
-                clip_model=clip_model,
-                clip_tokenizer=clip_tokenizer,
-                with_grad=True,
-            )
-            return -fitnesses.mean()
+        # Prepare fixed tensors (batch size always 1 for Adam)
+        latents_init = torch.tensor(np.array(initial_solution["latent"]), device=device, dtype=pipe.unet.dtype)
+        prompt_embeds_init = torch.tensor(np.array(initial_solution["prompt_embedding"]), device=device, dtype=pipe.unet.dtype)
+        
+        # Define loss function based on mutation key
+        if genotype == "latent":
+            def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+                # genotypes shape: (1, 4, 64, 64) -> squeeze to (1, 4, 64, 64) (keep batch dim for latents)
+                # Actually latents need the batch dimension, so no squeeze needed
+                generated_images = generate_images_from_latents(
+                    latents=genotypes,
+                    prompt_embedding=prompt_embeds_init,
+                    num_inference_steps=config.model.num_inference_steps,
+                    guidance_scale=config.model.guidance_scale,
+                    scheduler=scheduler,
+                    unet=pipe.unet,
+                    vae=pipe.vae,
+                    with_grad=True,
+                )
+                fitnesses = fitness_function(
+                    generated_images=generated_images,
+                    prompt=prompt,
+                    clip_model=clip_model,
+                    clip_tokenizer=clip_tokenizer,
+                    with_grad=True,
+                )
+                return -fitnesses.mean()
+        
+        elif genotype == "prompt_embedding":
+            def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
+                # genotypes shape: (1, 2, 77, 768) -> squeeze to (2, 77, 768)
+                # For SD-1.5, prompt_embedding should be (2, 77, 768) for guidance
+                if genotypes.shape[0] == 1:
+                    genotypes = genotypes.squeeze(0)
+                
+                generated_images = generate_images_from_latents(
+                    latents=latents_init,
+                    prompt_embedding=genotypes,
+                    num_inference_steps=config.model.num_inference_steps,
+                    guidance_scale=config.model.guidance_scale,
+                    scheduler=scheduler,
+                    unet=pipe.unet,
+                    vae=pipe.vae,
+                    with_grad=True,
+                )
+                fitnesses = fitness_function(
+                    generated_images=generated_images,
+                    prompt=prompt,
+                    clip_model=clip_model,
+                    clip_tokenizer=clip_tokenizer,
+                    with_grad=True,
+                )
+                return -fitnesses.mean()
+        
+        else:
+            raise ValueError(f"Unsupported genotype '{genotype}' for SD-1.5 Adam emitter.")
 
     elif config.model.name == "sdxl-turbo":
         # Prepare fixed embeddings/latents and time_ids

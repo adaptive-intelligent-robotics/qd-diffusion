@@ -62,9 +62,9 @@ def me_metrics_function(
         if config.emitter.genotype != "multi":
             current_metrics["evaluations"] = iteration
         else:
-            if config.model == "sd-1-5":
+            if config.model.name == "sd-1-5":
                 current_metrics["evaluations"] = iteration * 2
-            elif config.model == "sdxl-turbo":
+            elif config.model.name == "sdxl-turbo":
                 current_metrics["evaluations"] = iteration * 3
     else:
         current_metrics["evaluations"] = iteration * config.batch_size
