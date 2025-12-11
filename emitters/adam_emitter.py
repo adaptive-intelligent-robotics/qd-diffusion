@@ -64,6 +64,18 @@ class AdamDictEmitter(EmitterBase):
         self._rng = np.random.default_rng(seed)
         self._torch_dtype = torch.float32
 
+        # Initialize persistent parameter and optimizer with seed mutation tensor
+        seed_mut = self._seed_sol[self.mutation_key]
+        if seed_mut.ndim == len(self._solution_schema[self.mutation_key]):
+            seed_mut = seed_mut[np.newaxis, ...]
+        if seed_mut.shape[0] < self.batch_size:
+            reps = [self.batch_size] + [1] * (seed_mut.ndim - 1)
+            seed_mut = np.repeat(seed_mut, reps[0], axis=0)
+        self._param = torch.nn.Parameter(
+            torch.tensor(seed_mut.astype(np.float32), device=self._device, dtype=self._torch_dtype, requires_grad=True)
+        )
+        self._optim = torch.optim.Adam([self._param], lr=self.lr)
+
     # ------------------------------------------------------------------
     def _broadcast_parent(self, parent_batch: np.ndarray, target_shape: tuple):
         """Ensure parent_batch has leading batch dim == batch_size."""
@@ -92,41 +104,22 @@ class AdamDictEmitter(EmitterBase):
                 parent_sol[k] = self._broadcast_parent(v, self._solution_schema[k])
 
         start_np = parent_sol[self.mutation_key]
-        
-        param = torch.nn.Parameter(
-            torch.tensor(start_np, device=self._device, dtype=self._torch_dtype, requires_grad=True)
-        )
-        optim = torch.optim.Adam([param], lr=self.lr)
+        # Load current parents into persistent parameter without recreating optimizer
+        with torch.no_grad():
+            self._param.set_(
+                torch.tensor(start_np, device=self._device, dtype=self._torch_dtype)
+            )
 
-        # 3) Gradient steps with gradient accumulation
+        # 3) Gradient steps without micro-batching (full batch)
         for _ in range(self.steps):
-            optim.zero_grad()
-            
-            # Process in micro-batches to reduce memory usage
-            total_loss = 0.0
-            num_micro_batches = (self.batch_size + self.micro_batch_size - 1) // self.micro_batch_size
-            
-            for micro_idx in range(num_micro_batches):
-                start_idx = micro_idx * self.micro_batch_size
-                end_idx = min(start_idx + self.micro_batch_size, self.batch_size)
-                
-                # Extract micro-batch
-                micro_param = param[start_idx:end_idx]
-                
-                # Compute loss for micro-batch
-                micro_loss = self.loss_fn(micro_param)
-                if micro_loss.dim() != 0:
-                    micro_loss = micro_loss.mean()
-                
-                # Scale loss by micro-batch size for proper averaging
-                scaled_loss = micro_loss * (end_idx - start_idx) / self.batch_size
-                scaled_loss.backward()
-                
-                total_loss += micro_loss.item() * (end_idx - start_idx) / self.batch_size
-            
-            optim.step()
+            self._optim.zero_grad()
+            loss = self.loss_fn(self._param)
+            if loss.dim() != 0:
+                loss = loss.mean()
+            loss.backward()
+            self._optim.step()
 
-        updated_np = param.detach().cpu().numpy()
+        updated_np = self._param.detach().cpu().numpy()
 
         # 4) Build children dict
         children = {}
@@ -136,7 +129,7 @@ class AdamDictEmitter(EmitterBase):
             else:
                 children[k] = v
         
-        del total_loss, param, optim  # Free memory
+        # Free memory
         torch.cuda.empty_cache()
 
         return children
