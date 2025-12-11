@@ -30,7 +30,6 @@ class AdamDictEmitter(EmitterBase):
         batch_size: int,
         lr: float = 1e-3,
         steps: int = 1,
-        noise_sigma: float = 0.0,
         micro_batch_size: Optional[int] = None,
         device: str = "cuda",
         seed: Optional[int] = None,
@@ -58,14 +57,12 @@ class AdamDictEmitter(EmitterBase):
         self.batch_size = batch_size
         self.lr = lr
         self.steps = steps
-        self.noise_sigma = noise_sigma
         self.micro_batch_size = micro_batch_size if micro_batch_size is not None else min(batch_size, 4)
         self._device = device
         self._emitter_id = emitter_id
 
         self._rng = np.random.default_rng(seed)
         self._torch_dtype = torch.float32
-        self._iteration = 0  # Track iteration for first-iteration-only noise
 
     # ------------------------------------------------------------------
     def _broadcast_parent(self, parent_batch: np.ndarray, target_shape: tuple):
@@ -80,11 +77,6 @@ class AdamDictEmitter(EmitterBase):
 
     # ------------------------------------------------------------------
     def ask(self):
-        # Increment iteration counter
-        self._iteration += 1
-        
-        # Only add noise on the first iteration
-        add_noise = (self._iteration == 1)
 
         # 1) Select parents
         if self.archive.empty:
@@ -101,10 +93,6 @@ class AdamDictEmitter(EmitterBase):
 
         start_np = parent_sol[self.mutation_key]
         
-        # Add noise only on the first iteration
-        if add_noise and self.noise_sigma > 0:
-            start_np = start_np + self._rng.normal(scale=self.noise_sigma, size=start_np.shape).astype(start_np.dtype)
-
         param = torch.nn.Parameter(
             torch.tensor(start_np, device=self._device, dtype=self._torch_dtype, requires_grad=True)
         )

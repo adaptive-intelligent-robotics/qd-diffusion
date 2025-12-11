@@ -151,6 +151,9 @@ class DNSDictArchive(ArchiveBase):
                 raise ValueError("Archive created with flat dim, but got dict solution")
             solution_batch = solution
 
+        if objective.ndim == 0:
+            objective = np.array([objective])
+            
         batch_size = len(objective)
         
         # Custom validation (skipping ribs validate_batch for solution part)

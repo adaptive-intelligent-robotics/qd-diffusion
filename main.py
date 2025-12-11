@@ -461,10 +461,21 @@ def main(config: DictConfig) -> None:
         )
         
     elif config.emitter.type == "adam":
+        if config.emitter.genotype != "multi":
+            max_pop_size = 1
+            batch_sizes = [1]
+        else:
+            if config.model.name == "sd-1-5":
+                max_pop_size = 2
+                batch_sizes = [1, 1]
+            elif config.model.name == "sdxl-turbo":
+                max_pop_size = 3
+                batch_sizes = [1, 1, 1]
+        
         archive = PassivePopulationArchive( # overwrite DNS archive
             solution_dim=solution_schema,
             measure_dim=descriptor_dim,
-            population_size=config.batch_size,
+            population_size=max_pop_size,
             seed=config.seed,
             dtype=np.float32,
             batch_sizes=batch_sizes,
@@ -504,11 +515,10 @@ def main(config: DictConfig) -> None:
                 initial_solution=initial_solution,
                 mutation_key=config.emitter.genotype,
                 loss_fn=adam_loss_fn,
-                batch_size=config.batch_size,
+                batch_size=1,
                 lr=config.emitter.learning_rate,
                 steps=config.emitter.steps,
-                noise_sigma=config.emitter.noise_sigma,
-                micro_batch_size=config.emitter.gradient_batch_size,
+                micro_batch_size=1,
                 device=device,
                 seed=config.seed,
                 emitter_id=0,
@@ -542,11 +552,10 @@ def main(config: DictConfig) -> None:
                 initial_solution=initial_solution,
                 mutation_key="latent",
                 loss_fn=adam_loss_fn_1,
-                batch_size=batch_sizes[0],
+                batch_size=1,
                 lr=config.emitter.learning_rate,
                 steps=config.emitter.steps,
-                noise_sigma=config.emitter.latent_noise_sigma,
-                micro_batch_size=config.emitter.gradient_batch_size,
+                micro_batch_size=1,
                 device=device,
                 seed=config.seed,
                 emitter_id=0,
@@ -556,11 +565,10 @@ def main(config: DictConfig) -> None:
                 initial_solution=initial_solution,
                 mutation_key="prompt_embedding",
                 loss_fn=adam_loss_fn_2,
-                batch_size=batch_sizes[1],
+                batch_size=1,
                 lr=config.emitter.learning_rate,
                 steps=config.emitter.steps,
-                noise_sigma=config.emitter.prompt_embedding_noise_sigma,
-                micro_batch_size=config.emitter.gradient_batch_size,
+                micro_batch_size=1,
                 device=device,
                 seed=config.seed,
                 emitter_id=1,
@@ -584,11 +592,10 @@ def main(config: DictConfig) -> None:
                     initial_solution=initial_solution,
                     mutation_key="pooled_prompt_embedding",
                     loss_fn=adam_loss_fn_3,
-                    batch_size=batch_sizes[2],
+                    batch_size=1,
                     lr=config.emitter.learning_rate,
                     steps=config.emitter.steps,
-                    noise_sigma=config.emitter.pooled_prompt_embedding_noise_sigma,
-                    micro_batch_size=config.emitter.gradient_batch_size,
+                    micro_batch_size=1,
                     device=device,
                     seed=config.seed,
                     emitter_id=2,
@@ -604,7 +611,18 @@ def main(config: DictConfig) -> None:
     gc.collect()
 
     logger.warning("--- Algorithm initialisation ---")
-    for itr in range(1, config.max_iterations + 1):
+    if config.emitter.type == "adam":
+        if config.emitter.genotype != "multi":
+            max_iters = config.max_iterations * config.batch_size
+            save_repertoire_period = config.save_repertoire_period * config.batch_size
+        else:
+            max_iters = np.ceil(config.max_iterations * config.batch_size / len(emitters))
+            save_repertoire_period = np.ceil(config.save_repertoire_period * config.batch_size / len(emitters))
+    else:
+        max_iters = config.max_iterations
+        save_repertoire_period = config.save_repertoire_period
+           
+    for itr in range(1, int(max_iters) + 1):
         solutions = scheduler.ask()
         
         fitnesses, descriptors, images = scoring_fn(solutions)
@@ -627,13 +645,14 @@ def main(config: DictConfig) -> None:
         wandb.log(current_metrics)
         csv_logger.log(current_metrics)
         logger.warning(f"--- ITERATION: {itr} ---")
+        logger.warning(f"---- Evaluations: {current_metrics['evaluations']}")
         logger.warning(f"Max Fitness: {current_metrics['max_fitness']:.3f}")
         logger.warning(f"QD Score: {current_metrics['qd_score']:.3f}")
         logger.warning(f"Avg Descriptor Distance: {current_metrics['avg_pairwise_dist']:.3f}")
         logger.warning(f"Top {config.top_k} Avg Fitness: {current_metrics[f'top_{config.top_k}_fitness_avg']:.3f}")
         logger.warning(f"Top {config.top_k} Avg Descriptor Distance: {current_metrics[f'top_{config.top_k}_avg_pairwise_dist']:.3f}")
         
-        if itr % config.save_repertoire_period == 0:
+        if itr % save_repertoire_period == 0:
             if config.emitter.type == "adam":
                 save_repertoire(passive_dns_archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(

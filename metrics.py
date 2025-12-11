@@ -57,7 +57,17 @@ def me_metrics_function(
     # 1. Basic Setup
     current_metrics = {}
     current_metrics["iteration"] = iteration
-    current_metrics["evaluations"] = (iteration + 1) * config.batch_size
+    
+    if config.emitter.type == "adam":
+        if config.emitter.genotype != "multi":
+            current_metrics["evaluations"] = iteration
+        else:
+            if config.model == "sd-1-5":
+                current_metrics["evaluations"] = iteration * 2
+            elif config.model == "sdxl-turbo":
+                current_metrics["evaluations"] = iteration * 3
+    else:
+        current_metrics["evaluations"] = iteration * config.batch_size
     
     # Archive Stats
     current_metrics["coverage"] = repertoire.stats.coverage

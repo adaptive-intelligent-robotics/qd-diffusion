@@ -43,6 +43,9 @@ class DictScheduler(Scheduler):
         if self._cur_solutions is None:
             raise RuntimeError("ask() must be called before tell().")
 
+        if objective.ndim == 0:
+            objective = np.array([objective])
+        
         total_size = sum(self._solution_batch_sizes)
         if len(objective) != total_size:
             raise ValueError(f"Objective length {len(objective)} != total batch size {total_size}")

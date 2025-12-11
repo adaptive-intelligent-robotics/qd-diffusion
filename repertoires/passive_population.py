@@ -74,8 +74,6 @@ class PassivePopulationArchive(ArchiveBase):
         else:
             self.start_idxs.append(0)
             self.end_idxs.append(population_size)
-        print("Emitter start indices:", self.start_idxs)
-        print("Emitter end indices:", self.end_idxs)
 
         # --- SOLUTION SCHEMA HANDLING ---
         if isinstance(solution_dim, dict):
@@ -163,7 +161,6 @@ class PassivePopulationArchive(ArchiveBase):
         solution: Dict,
         objective: np.ndarray,
         measures: np.ndarray,
-        emitter_id: int = 0,
         **fields,
     ) -> Dict:
         """
@@ -178,16 +175,11 @@ class PassivePopulationArchive(ArchiveBase):
         Returns:
             add_info: Status dict for each solution.
         """
-        batch_size = len(objective)
         
-        start_idx = self._emitter_start_idx
-        end_idx = start_idx + batch_size
-
-        if batch_size > (self._emitter_end_idx - self._emitter_start_idx):
-            raise ValueError(
-                f"Batch size {batch_size} exceeds emitter's allocated population size {self._emitter_end_idx - self._emitter_start_idx}"
-            )
-
+        # Determine number of objectives
+        if objective.ndim == 0:
+            objective = np.array([objective])
+            
         # Normalize solution input
         if not isinstance(solution, dict):
             if self._is_structured:
@@ -199,24 +191,21 @@ class PassivePopulationArchive(ArchiveBase):
             solution_batch = solution
 
         add_info = {
-            "status": np.zeros(batch_size, dtype=np.int32),
+            "status": np.zeros(objective.shape[0], dtype=np.int32),
             "value": objective.copy(),
         }
 
         # Overwrite emitter's slice with new solutions
         for k in self._solutions:
-            self._solutions[k][start_idx:end_idx] = solution_batch[k]
+            self._solutions[k] = solution_batch[k]
 
-        self._objectives[start_idx:end_idx] = objective
-        self._measures[start_idx:end_idx] = measures
+        self._objectives = objective
+        self._measures = measures
 
         # Handle extra fields
         for name, value in fields.items():
             if name in self._extra_field_arrays:
-                self._extra_field_arrays[name][start_idx:end_idx] = value
-
-        # Update total num_elites to include all populated slices
-        self._num_elites = max(self._num_elites, end_idx)
+                self._extra_field_arrays[name] = value
 
         # Mark all as "added"
         add_info["status"][:] = 2
