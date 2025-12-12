@@ -87,7 +87,6 @@ class AdamDictEmitter(EmitterBase):
             arr = np.repeat(arr, reps[0], axis=0)
         return arr.astype(np.float32)
 
-    # ------------------------------------------------------------------
     def ask(self):
 
         # 1) Select parents
@@ -103,14 +102,8 @@ class AdamDictEmitter(EmitterBase):
                 target_shape = (self.batch_size, *self._solution_schema[k])
                 parent_sol[k] = self._broadcast_parent(v, self._solution_schema[k])
 
-        start_np = parent_sol[self.mutation_key]
-        # Load current parents into persistent parameter without recreating optimizer
-        with torch.no_grad():
-            self._param.set_(
-                torch.tensor(start_np, device=self._device, dtype=self._torch_dtype)
-            )
 
-        # 3) Gradient steps without micro-batching (full batch)
+        # 2) Gradient steps
         for _ in range(self.steps):
             self._optim.zero_grad()
             loss = self.loss_fn(self._param)
@@ -121,7 +114,7 @@ class AdamDictEmitter(EmitterBase):
 
         updated_np = self._param.detach().cpu().numpy()
 
-        # 4) Build children dict
+        # 3) Build children dict
         children = {}
         for k, v in parent_sol.items():
             if k == self.mutation_key:
