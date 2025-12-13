@@ -1,0 +1,7 @@
+name: "multi-sep-cma-es"
+type: "sep-cma-es"
+genotype: "multi"
+
+latent_sigma: 0.1
+prompt_embedding_sigma: 0.1
+pooled_prompt_embedding_sigma: 0.1

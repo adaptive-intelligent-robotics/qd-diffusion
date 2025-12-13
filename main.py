@@ -18,6 +18,7 @@ torch.backends.cuda.matmul.allow_tf32 = False
 # Enforce deterministic algorithms where supported; warn instead of raising if an op is not
 torch.use_deterministic_algorithms(True, warn_only=True)
 from emitters.adam_emitter import AdamDictEmitter, prepare_adam_loss_fn
+from emitters.custom_sep_cma_es import CMAESDictEmitter
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
@@ -602,6 +603,78 @@ def main(config: DictConfig) -> None:
                 )
                 emitters.append(emitter_3)
     
+    elif config.emitter.type == "sep-cma-es":
+        # Doesn't interact with the main archive, so create a passive population archive to store solutions
+        archive = PassivePopulationArchive(
+            solution_dim=solution_schema,
+            measure_dim=descriptor_dim,
+            population_size=config.batch_size, 
+            seed=config.seed,
+            dtype=np.float32,
+            batch_sizes=batch_sizes, 
+        )
+        
+        passive_dns_archive = DNSDictArchive(
+            solution_dim=solution_schema,
+            measure_dim=descriptor_dim,
+            max_size=config.max_pop_size,
+            fitness_threshold=config.fitness_threshold,
+            k=config.algorithm.k,
+            distance_metric=config.algorithm.distance_metric,
+            seed=config.seed,
+            dtype=np.float32,
+        )
+        if config.emitter.genotype != "multi":
+            # Single Emitter Case
+            emitter = CMAESDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key=config.emitter.genotype, # e.g. "latent"
+                sigma0=config.emitter.sigma,         # e.g. 0.1 or 1.0
+                batch_size=config.batch_size,
+                num_parents=config.batch_size // 2,
+                seed=config.seed,
+                bounds=None # Add [lower, upper] list if needed
+            )
+        else:
+            emitter_1 = CMAESDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="latent",
+                sigma0=config.emitter.latent_sigma,
+                batch_size=batch_sizes[0],
+                num_parents=batch_sizes[0] // 2,
+                seed=config.seed,
+                bounds=None
+            )
+            emitter_2 = CMAESDictEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="prompt_embedding",
+                sigma0=config.emitter.prompt_embedding_sigma,
+                batch_size=batch_sizes[1],
+                num_parents=batch_sizes[1] // 2,
+                seed=config.seed,
+                bounds=None
+            )
+            emitters = [emitter_1, emitter_2]
+            if config.model.name == "sdxl-turbo":
+                emitter_3 = CMAESDictEmitter(
+                    archive=archive,
+                    initial_solution=initial_solution,
+                    mutation_key="pooled_prompt_embedding",
+                    sigma0=config.emitter.pooled_prompt_embedding_sigma,
+                    batch_size=batch_sizes[2],
+                    num_parents=batch_sizes[2] // 2,
+                    seed=config.seed,
+                    bounds=None
+                )
+                emitters.append(emitter_3)
+                
+    else:
+        assert False, "Emitter type not recognised"
+                    
+    
     if config.emitter.genotype != "multi":
         scheduler = DictScheduler(archive, [emitter])
     else:
@@ -629,7 +702,7 @@ def main(config: DictConfig) -> None:
         save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
         scheduler.tell(fitnesses, descriptors, image=images)
         
-        if config.emitter.type == "adam":
+        if config.emitter.type in ["adam", "sep-cma-es"]:
             solutions_to_add = solutions.copy()
             solutions_to_add["image"] = images.detach().cpu().numpy()  # Add images to solutions dict
             passive_dns_archive.add(
@@ -653,7 +726,7 @@ def main(config: DictConfig) -> None:
         logger.warning(f"Top {config.top_k} Avg Descriptor Distance: {current_metrics[f'top_{config.top_k}_avg_pairwise_dist']:.3f}")
         
         if itr % save_repertoire_period == 0:
-            if config.emitter.type == "adam":
+            if config.emitter.type in ["adam", "sep-cma-es"]:
                 save_repertoire(passive_dns_archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(
                     passive_dns_archive,
@@ -672,7 +745,7 @@ def main(config: DictConfig) -> None:
                     _images_dir
                     )
     
-    if config.emitter.type == "adam":
+    if config.emitter.type in ["adam", "sep-cma-es"]:
         save_repertoire(passive_dns_archive, "final", _repertoire_dir, config)
         plot_repertoire_images(
             passive_dns_archive,

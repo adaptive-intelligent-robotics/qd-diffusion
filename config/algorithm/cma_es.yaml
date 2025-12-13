@@ -1,7 +1,0 @@
-name: "cma_es"
-population_size: 4
-num_best: 2
-sigma: 0.1
-delay_eigen_decomposition: True
-max_iterations: 200
-with_grad: False

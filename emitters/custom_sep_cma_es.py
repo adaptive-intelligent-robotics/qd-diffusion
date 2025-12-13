@@ -16,6 +16,62 @@ from ribs.emitters.opt._evolution_strategy_base import (
     EvolutionStrategyBase,
 )
 
+from ribs.emitters._emitter_base import EmitterBase
+
+class CMAESDictEmitter(EmitterBase):
+    """
+    Wrapper that allows SeparableCMAESDict to be used with a DictScheduler.
+    """
+    def __init__(
+        self,
+        archive,
+        *,
+        initial_solution,
+        mutation_key,
+        sigma0,
+        batch_size,
+        num_parents,
+        seed=None,
+        bounds=None,
+    ):
+        # We handle the solution schema manually, so we pass solution_dim=() to base
+        self._solution_schema = archive.solution_dim
+        self._num_parents = num_parents
+        super().__init__(archive=archive, solution_dim=(), bounds=bounds)
+        
+        # Instantiate the Optimizer (The class you provided in the previous turn)
+        self.es = SeparableCMAESDict(
+            initial_solution=initial_solution,
+            mutation_key=mutation_key,
+            sigma0=sigma0,
+            batch_size=batch_size,
+            seed=seed,
+            lower_bounds=bounds[0] if bounds else -np.inf,
+            upper_bounds=bounds[1] if bounds else np.inf,
+        )
+        self.batch_size = self.es.batch_size
+        
+    def ask(self):
+        # Simply delegate to the optimizer
+        return self.es.ask()
+
+    def tell(self, solution, objective, measures, add_info, **fields):
+        # Ribs schedulers provide objectives in the order of the batch.
+        # We need to sort them because the ES expects ranked inputs.
+        
+        # 1. Sort indices by fitness (descending)
+        indices = np.argsort(objective)[::-1]
+        
+        # 2. Get the sorted values
+        sorted_values = objective[indices]
+        
+        # 3. Tell the optimizer (using the top 50% as parents is standard)
+        self.es.tell(
+            ranking_indices=indices,
+            ranking_values=sorted_values,
+            num_parents=self._num_parents
+        )
+
 
 class DiagonalMatrix:
     """Maintains a diagonal covariance matrix.
@@ -49,64 +105,86 @@ class DiagonalMatrix:
         return 1 / np.sqrt(self.cov)
 
 
-
-class SeparableCMAEvolutionStrategy(EvolutionStrategyBase):
-    """sep-CMA-ES optimizer for use with emitters.
-
-    Refer to :class:`EvolutionStrategyBase` for usage instruction.
-
-    Args:
-        sigma0 (float): Initial step size.
-        batch_size (int): Number of solutions to evaluate at a time. If None, we
-            calculate a default batch size based on solution_dim.
-        solution_dim (int): Size of the solution space.
-        seed (int): Seed for the random number generator.
-        dtype (str or data-type): Data type of solutions.
-        lower_bounds (float or np.ndarray): scalar or (solution_dim,) array indicating
-            lower bounds of the solution space. Scalars specify the same bound for the
-            entire space, while arrays specify a bound for each dimension. Pass -np.inf
-            in the array or scalar to indicated unbounded space.
-        upper_bounds (float or np.ndarray): Same as above, but for upper bounds (and
-            pass np.inf instead of -np.inf).
+class SeparableCMAESDict(EvolutionStrategyBase):
+    """
+    A dictionary-aware wrapper around Sep-CMA-ES.
+    
+    It optimizes ONE key (`mutation_key`) in the dictionary as a flat vector, 
+    but `ask()` returns a full dictionary batch (reshaped and broadcasted) 
+    compatible with your model/archive.
     """
 
-    def __init__(  # pylint: disable = super-init-not-called
+    def __init__(
         self,
+        initial_solution,
+        mutation_key,
         sigma0,
-        solution_dim,
         batch_size=None,
         seed=None,
         dtype=np.float64,
         lower_bounds=-np.inf,
         upper_bounds=np.inf,
     ):
+        # 1. Setup Dictionary Handling
+        if mutation_key not in initial_solution:
+            raise ValueError(f"mutation_key '{mutation_key}' not in initial_solution")
+        
+        self.mutation_key = mutation_key
+        
+        # Parse initial solution to numpy
+        self._seed_sol = {}
+        for k, v in initial_solution.items():
+            # Handle torch tensors if passed
+            val = v.detach().cpu().numpy() if hasattr(v, "detach") else np.array(v)
+            if val.ndim > 0 and val.shape[0] == 1:
+                val = val.squeeze(0)
+            self._seed_sol[k] = val
+            
+        # Calculate dimensions for the optimizer
+        target_arr = self._seed_sol[self.mutation_key]
+        self._feature_shape = target_arr.shape
+        flat_dim = np.prod(self._feature_shape)
+        
+        # 2. Standard Init (Passing calculated flat_dim)
         self.batch_size = (
-            4 + int(3 * np.log(solution_dim)) if batch_size is None else batch_size
+            4 + int(3 * np.log(flat_dim)) if batch_size is None else batch_size
         )
         self.sigma0 = sigma0
-        self.solution_dim = solution_dim
+        self.solution_dim = flat_dim 
         self.dtype = dtype
 
-        # Even scalars must be converted into 0-dim arrays so that they work
-        # with the bound check in numba.
         self.lower_bounds = np.asarray(lower_bounds, dtype=self.dtype)
         self.upper_bounds = np.asarray(upper_bounds, dtype=self.dtype)
 
         self._rng = np.random.default_rng(seed)
-        self._solutions = None
+        
+        # self._solutions stores the FLAT vectors for the math to work
+        self._solutions = None 
 
-        # Strategy-specific params -> initialized in reset().
+        # Strategy-specific params
         self.current_eval = None
         self.mean = None
         self.sigma = None
         self.pc = None
         self.ps = None
         self.cov = None
+        
+        # Initialize mean with the flattened seed
+        self.reset(self._seed_sol)
 
     def reset(self, x0):
         self.current_eval = 0
         self.sigma = self.sigma0
-        self.mean = np.array(x0, self.dtype)
+        
+        # Handle dict input for reset
+        if isinstance(x0, dict):
+             # Update seed cache if needed
+             # (Optional: you might want to update self._seed_sol here)
+             flat_x0 = x0[self.mutation_key].flatten()
+        else:
+             flat_x0 = x0
+             
+        self.mean = np.array(flat_x0, self.dtype)
 
         # Setup evolution path variables.
         self.pc = np.zeros(self.solution_dim, dtype=self.dtype)
@@ -155,9 +233,13 @@ class SeparableCMAEvolutionStrategy(EvolutionStrategyBase):
         return solutions, out_of_bounds
 
     def ask(self, batch_size=None):
+        """
+        Returns a DICTIONARY of solutions (batch, ...).
+        """
         if batch_size is None:
             batch_size = self.batch_size
 
+        # 1. Generate FLAT solutions (Standard Logic)
         self._solutions = np.empty((batch_size, self.solution_dim), dtype=self.dtype)
         transform_vec = np.sqrt(self.cov.eigenvalues)
 
@@ -190,8 +272,24 @@ class SeparableCMAEvolutionStrategy(EvolutionStrategyBase):
             if sampling_itrs > BOUNDS_SAMPLING_THRESHOLD:
                 warnings.warn(BOUNDS_WARNING)
 
-        return readonly(self._solutions)
-
+        # 2. Reshape & Broadcast to Dictionary (New Logic)
+        
+        # Reshape the mutation key: (Batch, Flat) -> (Batch, *FeatureShape)
+        reshaped_mutations = self._solutions.reshape(batch_size, *self._feature_shape)
+        
+        batch_dict = {}
+        for k, v in self._seed_sol.items():
+            if k == self.mutation_key:
+                batch_dict[k] = reshaped_mutations.astype(np.float32)
+            else:
+                # Broadcast fixed keys: (Shape) -> (Batch, Shape)
+                arr = v[np.newaxis, ...]
+                reps = [batch_size] + [1] * (arr.ndim - 1)
+                batch_dict[k] = np.repeat(arr, reps[0], axis=0).astype(np.float32)
+                
+        # We return the dictionary, but self._solutions keeps the flat arrays
+        # so that tell() works without modification.
+        return batch_dict
 
 
     @staticmethod
