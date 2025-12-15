@@ -1,9 +1,9 @@
-"""Contains the GridArchive."""
+"""Contains the GridDictArchive."""
 
 from __future__ import annotations
 
 from collections.abc import Collection, Iterator
-from typing import Literal, overload
+from typing import Literal, overload, Dict, Any
 
 import numpy as np
 from numpy.typing import ArrayLike, DTypeLike
@@ -26,10 +26,9 @@ from ribs.archives._utils import (
     parse_all_dtypes,
     validate_cma_mae_settings,
 )
-from ribs.typing import BatchData, FieldDesc, Float, Int, SingleData
 
 
-class GridArchive(ArchiveBase):
+class GridDictArchive(ArchiveBase):
     """An archive that divides each dimension into uniformly-sized cells.
 
     This archive is the container described in `Mouret 2015
@@ -105,26 +104,36 @@ class GridArchive(ArchiveBase):
     def __init__(
         self,
         *,
-        solution_dim: Int | tuple[Int, ...],
-        dims: Collection[Int],
-        ranges: Collection[tuple[Float, Float]],
-        learning_rate: Float | None = None,
-        threshold_min: Float = -np.inf,
-        epsilon: Float = 1e-6,
-        qd_score_offset: Float = 0.0,
-        seed: Int | None = None,
+        solution_dim: Dict[str, tuple[int, ...]] | int | tuple[int, ...],
+        dims: Collection[int],
+        ranges: Collection[tuple[float, float]],
+        learning_rate: float | None = None,
+        threshold_min: float = -np.inf,
+        epsilon: float = 1e-6,
+        qd_score_offset: float = 0.0,
+        seed: int | None = None,
         solution_dtype: DTypeLike = None,
         objective_dtype: DTypeLike = None,
         measures_dtype: DTypeLike = None,
         dtype: DTypeLike = None,
-        extra_fields: FieldDesc | None = None,
+        extra_fields: dict | None = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
         self._dims = np.array(dims, dtype=np.int32)
 
+        # --- DICT SCHEMA HANDLING ---
+        if isinstance(solution_dim, dict):
+            self._solution_schema = solution_dim
+        else:
+            # Backward compatibility / fallback for flat solutions
+            shape = (solution_dim,) if isinstance(solution_dim, int) else solution_dim
+            self._solution_schema = {"data": shape}
+
+        # Pass empty tuple to ArchiveBase for solution_dim because we handle
+        # the schema manually via separate fields in ArrayStore.
         ArchiveBase.__init__(
             self,
-            solution_dim=solution_dim,
+            solution_dim=(),
             objective_dim=(),
             measure_dim=len(self._dims),
         )
@@ -132,24 +141,34 @@ class GridArchive(ArchiveBase):
         # Set up the ArrayStore, which is a data structure that stores all the elites'
         # data in arrays sharing a common index.
         extra_fields = extra_fields or {}
-        reserved_fields = {"solution", "objective", "measures", "threshold", "index"}
+        reserved_fields = {"objective", "measures", "threshold", "index"}
+        # Note: We do not reserve "solution" because we split it into solution_KEY fields
+
         if reserved_fields & extra_fields.keys():
             raise ValueError(
-                "The following names are not allowed in "
-                f"extra_fields: {reserved_fields}"
+                f"The following names are not allowed in extra_fields: {reserved_fields}"
             )
         solution_dtype, objective_dtype, measures_dtype = parse_all_dtypes(
             dtype, solution_dtype, objective_dtype, measures_dtype, np
         )
+
+        # Construct fields for the store dynamically based on schema
+        store_fields = {
+            "objective": ((), objective_dtype),
+            "measures": (self.measure_dim, measures_dtype),
+            "threshold": ((), objective_dtype),
+            **extra_fields,
+        }
+
+        # Flatten solution schema into store fields
+        for key, shape in self._solution_schema.items():
+            field_name = f"solution_{key}"
+            if field_name in extra_fields:
+                raise ValueError(f"Solution key '{key}' conflicts with extra_fields.")
+            store_fields[field_name] = (shape, solution_dtype)
+
         self._store = ArrayStore(
-            field_desc={
-                "solution": (self.solution_dim, solution_dtype),
-                "objective": ((), objective_dtype),
-                "measures": (self.measure_dim, measures_dtype),
-                # Must be same dtype as the objective since they share calculations.
-                "threshold": ((), objective_dtype),
-                **extra_fields,
-            },
+            field_desc=store_fields,
             capacity=np.prod(self._dims),
         )
 
@@ -159,9 +178,7 @@ class GridArchive(ArchiveBase):
                 f"dims (length {len(self._dims)}) and ranges "
                 f"(length {len(ranges)}) must be the same length"
             )
-        ranges = list(
-            zip(*ranges, strict=True)
-        )  # Rearrange into lower and upper bounds.
+        ranges = list(zip(*ranges, strict=True))
         self._lower_bounds = np.array(ranges[0], dtype=self.dtypes["measures"])
         self._upper_bounds = np.array(ranges[1], dtype=self.dtypes["measures"])
         self._interval_size = self._upper_bounds - self._lower_bounds
@@ -217,26 +234,11 @@ class GridArchive(ArchiveBase):
     ## Roughly ordered by the parameter list in the constructor. ##
 
     @property
-    def best_elite(self) -> SingleData:
-        """The elite with the highest objective in the archive.
-
-        None if there are no elites in the archive.
-
-        .. note::
-            If the archive is non-elitist (this occurs when using the archive with a
-            learning rate which is not 1.0, as in CMA-MAE), then this best elite may no
-            longer exist in the archive because it was replaced with an elite with a
-            lower objective value. This can happen because in non-elitist archives, new
-            solutions only need to exceed the *threshold* of the cell they are being
-            inserted into, not the *objective* of the elite currently in the cell. See
-            :pr:`314` for more info.
-
-        .. note::
-            The best elite will contain a "threshold" key. This threshold is the
-            threshold of the best elite's cell after the best elite was inserted into
-            the archive.
-        """
-        return self._best_elite
+    def best_elite(self) -> Any:
+        """The elite with the highest objective in the archive (Reconstructed Dict)."""
+        if self._best_elite is None:
+            return None
+        return self._reconstruct_elite(self._best_elite)
 
     @property
     def dims(self) -> np.ndarray:
@@ -244,7 +246,7 @@ class GridArchive(ArchiveBase):
         return self._dims
 
     @property
-    def cells(self) -> Int:
+    def cells(self) -> int:
         """Total number of cells in the archive."""
         return self._store.capacity
 
@@ -306,10 +308,26 @@ class GridArchive(ArchiveBase):
     def __len__(self) -> int:
         return len(self._store)
 
-    def __iter__(self) -> Iterator[SingleData]:
-        return iter(self._store)
+    def __iter__(self) -> Iterator[Any]:
+        """Iterator yielding reconstructed dictionary elites."""
+        for flat_elite in self._store:
+            yield self._reconstruct_elite(flat_elite)
 
-    ## Utilities ##
+    # --- HELPER: Reconstruct Dict from Flat Store ---
+    def _reconstruct_elite(self, flat_elite: Dict[str, Any]) -> Dict[str, Any]:
+        """Converts internal solution_key format back to nested dict."""
+        reconstructed = {}
+        sol_dict = {}
+        for k, v in flat_elite.items():
+            if k.startswith("solution_"):
+                original_key = k[9:]  # remove 'solution_'
+                sol_dict[original_key] = v
+            else:
+                reconstructed[k] = v
+        reconstructed["solution"] = sol_dict
+        return reconstructed
+
+    ## Utilities for stats updating ##
 
     def _stats_reset(self) -> None:
         """Resets the archive stats."""
@@ -324,7 +342,7 @@ class GridArchive(ArchiveBase):
             obj_mean=None,
         )
 
-    def _stats_update(self, new_objective_sum: Float, new_best_index: Float) -> None:
+    def _stats_update(self, new_objective_sum: float, new_best_index: float) -> None:
         """Updates statistics.
 
         Update is based on a new sum of objective values (new_objective_sum) and the
@@ -411,7 +429,7 @@ class GridArchive(ArchiveBase):
 
         return self.grid_to_int_index(grid_indices)
 
-    def index_of_single(self, measures: ArrayLike) -> Int:
+    def index_of_single(self, measures: ArrayLike) -> int:
         """Returns the index of the measures for one solution.
 
         See :meth:`index_of`.
@@ -420,7 +438,7 @@ class GridArchive(ArchiveBase):
             measures: (:attr:`measure_dim`,) array of measures for a single solution.
 
         Returns:
-            Integer index of the measures in the archive's storage arrays.
+            integer index of the measures in the archive's storage arrays.
 
         Raises:
             ValueError: ``measures`` is not of shape (:attr:`measure_dim`,).
@@ -519,7 +537,7 @@ class GridArchive(ArchiveBase):
 
     def add(
         self,
-        solution: ArrayLike,
+        solution: Dict[str, ArrayLike] | ArrayLike,
         objective: ArrayLike,
         measures: ArrayLike,
         **fields: ArrayLike,
@@ -608,7 +626,7 @@ class GridArchive(ArchiveBase):
         data = validate_batch(
             self,
             {
-                "solution": solution,
+                **flat_solution_fields,
                 "objective": objective,
                 "measures": measures,
                 **fields,
@@ -616,7 +634,7 @@ class GridArchive(ArchiveBase):
         )
 
         # Delete these so that we only use the clean, validated data in `data`.
-        del solution, objective, measures, fields
+        del solution, objective, measures, fields, flat_solution_fields
 
         # Information to return about the addition.
         add_info = {}
@@ -717,11 +735,11 @@ class GridArchive(ArchiveBase):
 
     def add_single(
         self,
-        solution: ArrayLike,
+        solution: Dict[str, ArrayLike] | ArrayLike,
         objective: ArrayLike,
         measures: ArrayLike,
         **fields: ArrayLike,
-    ) -> SingleData:
+    ) -> Any:
         """Inserts a single solution into the archive.
 
         The solution is only inserted if it has a higher ``objective`` than the
@@ -751,15 +769,22 @@ class GridArchive(ArchiveBase):
             ValueError: ``objective`` is non-finite (inf or NaN) or ``measures``
                 has non-finite values.
         """
+        # 1. Flatten dictionary
+        if not isinstance(solution, dict):
+            flat_solution_fields = {"solution_data": solution}
+        else:
+            flat_solution_fields = {f"solution_{k}": v for k, v in solution.items()}
+
         data = validate_single(
             self,
             {
-                "solution": solution,
+                **flat_solution_fields,
                 "objective": objective,
                 "measures": measures,
                 **fields,
             },
         )
+        del solution, objective, measures, fields, flat_solution_fields
 
         # Delete these so that we only use the clean, validated data in `data`.
         del solution, objective, measures, fields
@@ -793,19 +818,8 @@ class GridArchive(ArchiveBase):
 
         # Retrieve candidate objective.
         objective = data["objective"]
+        add_info["status"] = np.int32(0)
 
-        # Compute status and threshold.
-        add_info["status"] = np.int32(0)  # NOT_ADDED
-
-        # Now we check whether a solution should be added to the archive. We use the
-        # addition rule from MAP-Elites (Fig. 2 of Mouret 2015
-        # https://arxiv.org/pdf/1504.04909.pdf), with modifications for CMA-MAE.
-
-        # This checks if a new solution is discovered in the archive. Note that regular
-        # MAP-Elites only checks `not cur_occupied`. CMA-MAE has an additional
-        # `threshold_min` that the objective must exceed for new cells. If CMA-MAE is
-        # not being used, then `threshold_min` is -np.inf, making this check identical
-        # to that of MAP-Elites.
         is_new = not cur_occupied and self.threshold_min < objective
 
         # This checks whether the solution improves an existing cell in the archive,
@@ -862,19 +876,39 @@ class GridArchive(ArchiveBase):
         check_batch_shape(measures, "measures", self.measure_dim, "measure_dim")
         check_finite(measures, "measures")
 
-        occupied, data = self._store.retrieve(self.index_of(measures))
-        fill_sentinel_values(occupied, data)
+        occupied, flat_data = self._store.retrieve(self.index_of(measures))
+        fill_sentinel_values(occupied, flat_data)
+
+        # Reconstruct
+        data = {}
+        sol_dict = {}
+        for k, v in flat_data.items():
+            if k.startswith("solution_"):
+                sol_dict[k[9:]] = v
+            else:
+                data[k] = v
+        data["solution"] = sol_dict
 
         return occupied, data
 
-    def retrieve_single(self, measures: ArrayLike) -> tuple[bool, SingleData]:
+    def retrieve_single(self, measures: ArrayLike) -> tuple[bool, Any]:
         measures = np.asarray(measures, dtype=self.dtypes["measures"])
         check_shape(measures, "measures", self.measure_dim, "measure_dim")
         check_finite(measures, "measures")
 
-        occupied, data = self.retrieve(measures[None])
-
-        return occupied[0], {field: arr[0] for field, arr in data.items()}
+        occupied, flat_data = self._store.retrieve([self.index_of_single(measures)])
+        
+        # Unpack single batch
+        data = {}
+        sol_dict = {}
+        for k, v in flat_data.items():
+             if k.startswith("solution_"):
+                sol_dict[k[9:]] = v[0]
+             else:
+                data[k] = v[0]
+        data["solution"] = sol_dict
+        
+        return occupied[0], data
 
     @overload
     def data(
@@ -909,9 +943,46 @@ class GridArchive(ArchiveBase):
         fields: None | Collection[str] | str = None,
         return_type: Literal["dict", "tuple", "pandas"] = "dict",
     ) -> np.ndarray | BatchData | tuple[np.ndarray] | ArchiveDataFrame:
-        return self._store.data(fields, return_type)
+        
+        # If accessing specific fields that are not "solution", standard behavior works
+        # If "solution" is requested, we must reconstruct it.
+        # Simplest approach: Get all data as dict, reconstruct, then filter.
 
-    def sample_elites(self, n: Int, replace: bool = True) -> BatchData:
+        flat_data = self._store.data(None, "dict")
+        
+        # Reconstruct
+        data = {}
+        sol_dict = {}
+        for k, v in flat_data.items():
+            if k.startswith("solution_"):
+                sol_dict[k[9:]] = v
+            else:
+                data[k] = v
+        data["solution"] = sol_dict
+
+        # If User requested specific fields
+        if fields is not None:
+            if isinstance(fields, str):
+                return data[fields]
+            return {k: data[k] for k in fields}
+
+        if return_type == "dict":
+            return data
+        
+        if return_type == "pandas":
+            # For pandas, we might want to keep solutions flattened
+            # to fit in a dataframe, or drop them if they are tensors.
+            # Default behavior for now: use the reconstructed dict
+            return ArchiveDataFrame(data)
+            
+        if return_type == "tuple":
+            # Return in order of field_list (reconstructed)
+            # This is ambiguous with dict solutions, so we return values of data dict
+            return tuple(data.values())
+
+        return data
+
+    def sample_elites(self, n: int, replace: bool = True) -> BatchData:
         if self.empty:
             raise IndexError("No elements in archive.")
         if not replace and n > len(self._store):
@@ -922,10 +993,9 @@ class GridArchive(ArchiveBase):
 
         random_indices = self._rng.choice(len(self._store), size=n, replace=replace)
         selected_indices = self._store.occupied_list[random_indices]
-        _, elites = self._store.retrieve(selected_indices)
-        return elites
+        _, flat_elites = self._store.retrieve(selected_indices)
 
-    ## retessellate ##
+        return self._reconstruct_elite(flat_elites)
 
     def retessellate(self, new_dims: Collection[int]) -> None:
         """Updates the resolution of this archive to the given dimensions.
@@ -966,13 +1036,16 @@ class GridArchive(ArchiveBase):
                 f"dimensionality of {self.measure_dim}."
             )
 
+        # Get all current data (reconstructed)
         cur_data = self.data()
-        del cur_data["index"]
-        # Note: No need to clear the store since we just replace it below.
+        if "index" in cur_data:
+            del cur_data["index"]
 
         self._dims = np.array(new_dims, dtype=np.int32)
         self._boundaries = self._compute_boundaries(
             self._dims, self._lower_bounds, self._upper_bounds
         )
         self._store = ArrayStore(self._store.field_desc, capacity=np.prod(self._dims))
+        
+        # Add back data (add() handles the dictionary unpacking)
         self.add(**cur_data)
