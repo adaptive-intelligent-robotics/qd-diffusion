@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from functools import partial
 from descriptors import get_descriptor_fun
+import descriptors
 from model_utils import toggle_prompt_embedding_shape
 
 def fitness_function(generated_images,
@@ -41,6 +42,33 @@ def fitness_function(generated_images,
     
     else:        
         return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
+
+def qdhf_compute_clip_scores(
+    generated_images,
+    prompt,
+    clip_model,
+    clip_tokenizer
+):
+    
+    """Computes CLIP scores for a batch of images and a given text prompt."""
+    normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
+    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
+
+    # img_tensor = torch.stack([CLIP_PREPROCESS(img) for img in imgs]).to(DEVICE)
+    tokenized_text = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
+    
+    with torch.no_grad():
+        img_logits, _text_logits = clip_model(normalized_images, tokenized_text)  
+        clip_features = clip_model.encode_image(normalized_images).to(generated_images.dtype)          
+
+    img_logits = img_logits.detach().cpu().numpy().astype(np.float32)[:, 0]
+    img_logits = 1 / img_logits * 100
+    # Remap the objective from minimizing [0, 10] to maximizing [0, 100]
+    qdhf_fitnesses = (10.0 - img_logits) * 10.0
+    
+    return qdhf_fitnesses, clip_features
+
+    
     
 def scoring_function(
     solutions,
@@ -74,6 +102,46 @@ def scoring_function(
         
     return fitnesses, descriptors, generated_images
 
+    
+def qdhf_scoring_function(
+    solutions,
+    prompt,
+    generate_images_from_latents_fun,
+    fitness_fun,
+    descriptor_fun,
+    model_name,
+):
+    
+    if model_name == "sd-1-5":
+        toggled_prompt_embeddings = toggle_prompt_embedding_shape(solutions["prompt_embedding"])
+        generated_images = generate_images_from_latents_fun(solutions["latent"], toggled_prompt_embeddings)
+        
+    elif model_name == "sdxl-turbo":
+        batch_size = solutions["latent"].shape[0]
+        time_ids = torch.tensor([[1024, 1024, 0, 0, 512, 512]] * batch_size).to(solutions["latent"].device)
+        generated_images = generate_images_from_latents_fun(
+            solutions["latent"],
+            solutions["prompt_embedding"],
+            solutions["pooled_prompt_embedding"],
+            time_ids=time_ids,
+        )
+
+    generated_images_np = np.array(generated_images.cpu())
+
+    # Find fitnesses  
+    fitnesses = fitness_fun(generated_images=generated_images)
+    
+    # Find descriptors
+    dreamsim_features = np.array([descriptor_fun(image) for image in generated_images_np])    
+    
+    qdhf_fitnesses, clip_features = qdhf_compute_clip_scores(
+        generated_images_np,
+        prompt,
+        return_clip_features=True,
+    )
+            
+    return fitnesses, qdhf_fitnesses, dreamsim_features, clip_features, generated_images
+
 
 def get_scoring_function(
     descriptor_name,
@@ -84,6 +152,7 @@ def get_scoring_function(
     generator,
     model_name, 
     save_dir,
+    config,
 ):
     
     descriptor_fn, descriptor_dim = get_descriptor_fun(
@@ -98,11 +167,23 @@ def get_scoring_function(
         clip_tokenizer=clip_tokenizer,
     )
     
-    scoring_fn = partial(scoring_function,
-        generate_images_from_latents_fun=generate_images_from_latents_fn,
-        fitness_fun=fitness_fn,
-        descriptor_fun=descriptor_fn,
-        model_name=model_name,
-    )
+    if config.algorithm.name == "qdhf":
+        if config.descriptor != "dreamsim":
+            raise ValueError("QDHF algorithm requires 'dreamsim' descriptor.")
+        scoring_fn = partial(qdhf_scoring_function,
+            prompt=prompt,
+            generate_images_from_latents_fun=generate_images_from_latents_fn,
+            fitness_fun=fitness_fn,
+            descriptor_fun=descriptor_fn,
+            model_name=model_name,
+        )
+        
+    else:
+        scoring_fn = partial(scoring_function,
+            generate_images_from_latents_fun=generate_images_from_latents_fn,
+            fitness_fun=fitness_fn,
+            descriptor_fun=descriptor_fn,
+            model_name=model_name,
+        )
     
     return scoring_fn, descriptor_dim

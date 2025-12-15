@@ -1,0 +1,6 @@
+name: "qdhf"
+latent_dims: 2
+grid_dims: 2
+minibatch_size: 32
+n_pref_data: 1000  # Number of preferences used in each update.
+update_schedule: [1, 5, 10, 21, 51, 101]  # Iterations at which to update the reward model.
