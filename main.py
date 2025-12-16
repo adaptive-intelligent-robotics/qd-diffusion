@@ -24,6 +24,7 @@ from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
+from emitters.qdhf_models import get_qdhf_archive, update_qdhf_diversity_model
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
 from metrics import CSVLogger, me_metrics_function
@@ -151,6 +152,7 @@ def main(config: DictConfig) -> None:
         generator=generator,
         model_name=config.model.name,
         save_dir=_initial_values_dir,
+        config=config,
     )
     # Calculate batch sizes for multi-emitters
     if config.emitter.genotype == "multi":
@@ -185,6 +187,31 @@ def main(config: DictConfig) -> None:
             distance_metric=config.algorithm.distance_metric,
             seed=config.seed,
             dtype=np.float32,
+        )
+    
+    elif config.algorithm.name == "qdhf":
+        qdhf_update_schedule = [# 1 by default below, define additional updates according to qdhf paper
+            int(0.1 * config.max_iterations),
+            int(0.25 * config.max_iterations),
+            int(0.5 * config.max_iterations),
+        ]
+        logger.warning ("--- Setting up QDHF Model ---")
+        
+        diversity_model, warmup_clip_features = update_qdhf_diversity_model(
+            None,
+            initial_solution,
+            scoring_fn,
+            config,
+            return_clip_features=True
+        )
+        logger.warning("--- Setting up QDHF Archive ---")
+        archive = get_qdhf_archive(
+            initial_solution,
+            scoring_fn,
+            diversity_model,
+            solution_schema,
+            config, 
+            warmup_clip_features
         )
      
     logger.warning("--- Setting up Emitter ---")
@@ -680,8 +707,6 @@ def main(config: DictConfig) -> None:
     else:
         scheduler = DictScheduler(archive, emitters)
 
-    del initial_solution
-    gc.collect()
 
     logger.warning("--- Algorithm initialisation ---")
     if config.emitter.type == "adam":
@@ -696,11 +721,48 @@ def main(config: DictConfig) -> None:
         save_repertoire_period = config.save_repertoire_period
            
     for itr in range(1, int(max_iters) + 1):
+        
+        if config.algorithm.name == "qdhf":
+            if itr in qdhf_update_schedule:
+                logger.warning(f"--- Updating QDHF Diversity Model at iteration {itr} ---")
+                diversity_model = update_qdhf_diversity_model(
+                    archive, 
+                    initial_solution,
+                    scoring_fn,
+                    config,
+                )
+                new_archive = get_qdhf_archive(
+                    archive.data()["solution"],
+                    scoring_fn,
+                    diversity_model,
+                    solution_schema,
+                    config,
+                )
+
+                if config.emitter.genotype != "multi":
+                    scheduler = DictScheduler(new_archive, [emitter])
+                else:
+                    scheduler = DictScheduler(new_archive, emitters)  
+                          
         solutions = scheduler.ask()
         
-        fitnesses, descriptors, images = scoring_fn(solutions)
-        save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
-        scheduler.tell(fitnesses, descriptors, image=images)
+        if config.algorithm.name != "qdhf":
+            fitnesses, descriptors, images = scoring_fn(solutions)
+            save_offspring_data(solutions, fitnesses, descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
+            scheduler.tell(fitnesses, descriptors, image=images)
+
+        elif config.algorithm.name == "qdhf":
+            dns_fitnesses, fitnesses, dns_descriptors, clip_descriptors, images = scoring_fn(solutions)
+            with torch.no_grad():
+                descriptors = diversity_model(clip_descriptors)
+            save_offspring_data(solutions, dns_fitnesses, dns_descriptors, images, itr, config, _offspring_dir, _images_dir, config.model)
+            scheduler.tell(
+                fitnesses,
+                descriptors,
+                image=images,
+                dns_fitness=dns_fitnesses,
+                dns_descriptor=dns_descriptors
+            )
         
         if config.emitter.type in ["adam", "sep-cma-es"]:
             solutions_to_add = solutions.copy()
@@ -736,9 +798,9 @@ def main(config: DictConfig) -> None:
                     _images_dir
                     )
             else:
-                save_repertoire(archive, itr, _repertoire_dir, config)
+                save_repertoire(scheduler.archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(
-                    archive,
+                    scheduler.archive,
                     itr,
                     config,
                     generate_images_from_latents_fn,
@@ -755,9 +817,9 @@ def main(config: DictConfig) -> None:
             _images_dir
             )
     else:
-        save_repertoire(archive, "final", _repertoire_dir, config)
+        save_repertoire(scheduler.archive, "final", _repertoire_dir, config)
         plot_repertoire_images(
-            archive,
+            scheduler.archive,
             "final",
             config,
             generate_images_from_latents_fn,

@@ -69,32 +69,36 @@ def me_metrics_function(
     else:
         current_metrics["evaluations"] = iteration * config.batch_size
     
-    # Archive Stats
-    current_metrics["coverage"] = repertoire.stats.coverage
-    current_metrics["qd_score"] = repertoire.stats.qd_score
-    current_metrics["max_fitness"] = repertoire.stats.obj_max
-
-    # 2. Extract Data
+    # 2. Extract Data & Handle Empty Archive
     data = repertoire.data()
     num_elites = repertoire.stats.num_elites
     
     # Need at least 2 elites for pairwise calc
     if num_elites < 2:
-        # Return zeros for all pairwise/variance metrics
-        zeros = ["avg_pairwise_dist", "total_variance", f"top_{config.top_k}_avg_dissimilarity_ssim", 
-                 f"top_{config.top_k}_avg_pairwise_dist", f"top_{config.top_k}_total_variance"]
-        for key in zeros:
-            current_metrics[key] = 0.0
-        current_metrics[f"top_{config.top_k}_fitness_avg"] = 0.0
+        # Zero out metrics if archive is empty/tiny
+        keys = ["qd_score", "max_fitness", "coverage", "avg_pairwise_dist", "total_variance", 
+                f"top_{config.top_k}_avg_dissimilarity_ssim", f"top_{config.top_k}_avg_pairwise_dist", 
+                f"top_{config.top_k}_total_variance", f"top_{config.top_k}_fitness_avg"]
+        for k in keys: current_metrics[k] = 0.0
         return current_metrics
+    
+    if config.algorithm.name == "qdhf":
+        
+        objectives = data["solution"]["dns_fitness"]
+        descriptors = data["solution"]["dns_descriptor"]
+        current_metrics["qd_score"] = np.sum(objectives)
+        current_metrics["max_fitness"] = np.max(objectives)
+        
+    else:
+        descriptors = data["measures"]
+        objectives = data["objective"]
+        
+        current_metrics["qd_score"] = repertoire.stats.qd_score
+        current_metrics["max_fitness"] = repertoire.stats.obj_max
 
-    # Access arrays
-    descriptors = data["measures"]     # (N, measure_dim)
-    objectives = data["objective"]     # (N,)
+    current_metrics["coverage"] = repertoire.stats.coverage
 
-    # --- 3. Identify Top-K Elites ---
-    # We sort by objective (fitness) and take the last K indices (highest fitness)
-    # If num_elites < top_k, we take all of them.
+    # --- 4. Identify Top-K Elites ---
     k = config.top_k
     sorted_indices = np.argsort(objectives)
     top_k_indices = sorted_indices[-k:] 
@@ -102,11 +106,13 @@ def me_metrics_function(
     top_k_descriptors = descriptors[top_k_indices]
     top_k_objectives = objectives[top_k_indices]
 
-    # --- 4. Descriptor Space Metrics (Whole vs Top-K) ---
-
-    # A) Whole Archive
-    dists_all = pdist(descriptors, metric='cosine')
-    current_metrics["avg_pairwise_dist"] = np.mean(dists_all)
+    # --- 5. Descriptor Space Metrics ---
+    try:
+        dists_all = pdist(descriptors, metric='cosine')
+        current_metrics["avg_pairwise_dist"] = np.nanmean(dists_all)
+    except ValueError:
+        current_metrics["avg_pairwise_dist"] = 0.0 # Handle edge cases
+        
     current_metrics["total_variance"] = np.sum(np.var(descriptors, axis=0))
 
     # B) Top-K Subset

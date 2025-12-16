@@ -43,7 +43,7 @@ def fitness_function(generated_images,
     else:        
         return fitnesses_torch.detach().cpu().numpy()  # Convert to NumPy
 
-def qdhf_compute_clip_scores(
+def qdhf_fitness_function(
     generated_images,
     prompt,
     clip_model,
@@ -58,15 +58,22 @@ def qdhf_compute_clip_scores(
     tokenized_text = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
     
     with torch.no_grad():
-        img_logits, _text_logits = clip_model(normalized_images, tokenized_text)  
-        clip_features = clip_model.encode_image(normalized_images).to(generated_images.dtype)          
+        outputs = clip_model(
+            pixel_values=normalized_images, 
+            **tokenized_text
+        )
+        
+        img_logits = outputs.logits_per_image
+        
+        clip_features = clip_model.get_image_features(pixel_values=normalized_images)
+        clip_features = clip_features / clip_features.norm(p=2, dim=-1, keepdim=True)       
 
     img_logits = img_logits.detach().cpu().numpy().astype(np.float32)[:, 0]
     img_logits = 1 / img_logits * 100
     # Remap the objective from minimizing [0, 10] to maximizing [0, 100]
     qdhf_fitnesses = (10.0 - img_logits) * 10.0
     
-    return qdhf_fitnesses, clip_features
+    return qdhf_fitnesses, clip_features.cpu()
 
     
     
@@ -105,9 +112,9 @@ def scoring_function(
     
 def qdhf_scoring_function(
     solutions,
-    prompt,
     generate_images_from_latents_fun,
     fitness_fun,
+    qdhf_fitness_fun,
     descriptor_fun,
     model_name,
 ):
@@ -132,13 +139,9 @@ def qdhf_scoring_function(
     fitnesses = fitness_fun(generated_images=generated_images)
     
     # Find descriptors
-    dreamsim_features = np.array([descriptor_fun(image) for image in generated_images_np])    
+    dreamsim_features = np.array([descriptor_fun(image) for image in generated_images_np])
     
-    qdhf_fitnesses, clip_features = qdhf_compute_clip_scores(
-        generated_images_np,
-        prompt,
-        return_clip_features=True,
-    )
+    qdhf_fitnesses, clip_features = qdhf_fitness_fun(generated_images=generated_images)  
             
     return fitnesses, qdhf_fitnesses, dreamsim_features, clip_features, generated_images
 
@@ -168,12 +171,20 @@ def get_scoring_function(
     )
     
     if config.algorithm.name == "qdhf":
+        
+        qdhf_fitness_fn = partial(qdhf_fitness_function,
+            prompt=prompt,
+            clip_model=clip_model,
+            clip_tokenizer=clip_tokenizer
+        )
+                                       
         if config.descriptor != "dreamsim":
             raise ValueError("QDHF algorithm requires 'dreamsim' descriptor.")
+        
         scoring_fn = partial(qdhf_scoring_function,
-            prompt=prompt,
             generate_images_from_latents_fun=generate_images_from_latents_fn,
             fitness_fun=fitness_fn,
+            qdhf_fitness_fun=qdhf_fitness_fn,
             descriptor_fun=descriptor_fn,
             model_name=model_name,
         )

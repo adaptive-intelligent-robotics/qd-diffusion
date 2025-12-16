@@ -144,113 +144,168 @@ def get_qdhf_archive(
     solutions,
     scoring_function,
     diversity_model,
+    solution_schema,
     config,
-    seed,
+    warmup_clip_features=None,
 ):
-    _, objs, _, clip_features, images = scoring_function(solutions)
+    """
+    Creates a new GridDictArchive based on the current solutions and diversity model.
+    """
+    # 1. Evaluate Solutions
+    # solutions is a dict: {'latent': (B, ...), 'prompt': (B, ...)}
+    dns_fitnesses, qdhf_fitnesses, dreamsim_features, clip_features, images = scoring_function(solutions)
+    
     with torch.no_grad():
-        measures = diversity_model(clip_features).detach().cpu().numpy()
-
-    archive_bounds = np.array(
-        [np.quantile(measures, 0.01, axis=0), np.quantile(measures, 0.99, axis=0)]
-    ).T
-
-    sols = solutions.detach().cpu().numpy()
-    sols = sols.reshape(sols.shape[0], -1)
-
-    # Set up archive.
+        measures = diversity_model(clip_features.float()).detach().cpu().numpy()
+    
+    # 2. Calculate Bounds (with Zero-Division Protection)
+    lower_bounds = np.quantile(measures, 0.01, axis=0)
+    upper_bounds = np.quantile(measures, 0.99, axis=0)
+    
+    # if it's first iteration, use the features from the "warmup" solutions
+    if warmup_clip_features is not None:
+        warmup_measures = diversity_model(warmup_clip_features.float()).detach().cpu().numpy()
+        lower_bounds = np.quantile(warmup_measures, 0.01, axis=0)
+        upper_bounds = np.quantile(measures, 0.99, axis=0)
+    
+    archive_bounds = np.array([lower_bounds, upper_bounds]).T
+    
+    solution_schema["dns_descriptor"] = (768,)
+    solution_schema["dns_fitness"] = ()
+        
     archive = GridDictArchive(
-        solution_dim=len(sols[0]),
-        dims=config.algorithm.latent_dims,
+        solution_dim=solution_schema, # Pass the schema dict
+        dims=[int(np.sqrt(config.max_pop_size)), config.max_pop_size // int(np.sqrt(config.max_pop_size))],   # e.g., [20, 20]
         ranges=archive_bounds,
-        seed=seed,
+        seed=config.seed,
+        dtype=np.float32,
     )
 
-    # Add initial solutions to the archive.
-    sols["image"] = images.cpu().numpy()
-    archive.add(sols, objs, measures)
+    sols_np = {}
+    for k, v in solutions.items():
+        if isinstance(v, torch.Tensor):
+            sols_np[k] = v.detach().cpu().numpy()
+        else:
+            sols_np[k] = v
+
+    sols_np["image"] = images.detach().cpu().numpy()
+    sols_np["dns_descriptor"] = dreamsim_features
+    sols_np["dns_fitness"] = dns_fitnesses
+    archive.add(sols_np, qdhf_fitnesses, measures)
     
     return archive
     
-def update_qdhf_diversity_model(archive, init_solution, scoring_function, config):
+def update_qdhf_diversity_model(archive, init_solution, scoring_function, config, return_clip_features=False):
     """
     Projects all history into new space, calculates bounds, 
     creates a new Grid Archive
     """
     
-    if archive is None:
-        all_sols = []
-        all_clip_features = []
-        all_dreamsim_features = []
-        all_objs = []
-        
-                
-        _, qdhf_fitness, dreamsim_feature, clip_feature, _ = scoring_function(init_solution)
-        
-        all_sols.append(init_solution['latent'].cpu().numpy())
-        all_clip_features.append(clip_feature)
-        all_dreamsim_features.append(dreamsim_feature)
-        all_objs.append(qdhf_fitness)
-        
-        # Initialize the diversity projection model.
-        div_proj_data = []
-        div_proj_labels = []
-        for _ in range(config.n_pref_data):
-            idx = np.random.choice(all_sols.shape[0], 3)
-            div_proj_data.append(all_clip_features[idx])
-            div_proj_labels.append(all_dreamsim_features[idx])
-            div_proj_data = torch.concat(div_proj_data, dim=0)
-            div_proj_labels = torch.concat(div_proj_labels, dim=0)
-            div_proj_data = div_proj_data.reshape(config.n_pref_data, 3, -1)
-            div_proj_label = div_proj_labels.reshape(config.n_pref_data, 3, -1)
-            diversity_model, _div_proj_acc = fit_div_proj(
-                div_proj_data,
-                div_proj_label,
-                latent_dim=config.latent_dims,
-            )
+    # Buffers for collecting features before training
+    all_clip_features = []
+    all_dreamsim_features = []
     
-    else:
-        # Get all the current solutions and collect feedback.
-        all_sols = archive.data("solution").detach().cpu().numpy().astype(np.float32)
-        all_sols.reshape(sols.shape[0], -1)
-        n_batches = np.ceil(len(all_sols) / config.algorithm.minibatch_size).astype(int)
-        all_clip_features = []
-        all_dreamsim_features = []
-        all_objs = []
-        for i in range(n_batches):
-            sols = all_sols[i * config.algorithm.minibatch_size : (i + 1) * config.algorithm.minibatch_size]
-            _, qdhf_fitness, dreamsim_features, clip_features, _ = scoring_function(init_solution)
-            all_sols
-            all_clip_features.append(clip_features)
-            all_dreamsim_features.append(dreamsim_features)
-            all_objs.append(qdhf_fitness)
-        all_clip_features = torch.concat(
-            all_clip_features, dim=0
-        )  # n_pref_data * 3, dim
-        all_dreamsim_features = torch.concat(all_dreamsim_features, dim=0)
-        all_objs = np.concatenate(all_objs, axis=0)
-
-        # Update the diversity projection model.
-        additional_features = []
-        additional_labels = []
-        for _ in range(config.algorithm.n_pref_data):
-            idx = np.random.choice(all_sols.shape[0], 3)
-            additional_features.append(all_clip_features[idx])
-            additional_labels.append(all_dreamsim_features[idx])
-        additional_features = torch.concat(additional_features, dim=0)
-        additional_labels = torch.concat(additional_labels, dim=0)
-        additional_div_proj_data = additional_features.reshape(config.algorithm.n_pref_data, 3, -1)
-        additional_div_proj_label = additional_labels.reshape(config.algorithm.n_pref_data, 3, -1)
-        div_proj_data = torch.concat(
-            (div_proj_data, additional_div_proj_data), axis=0
-        )
-        div_proj_label = torch.concat(
-            (div_proj_label, additional_div_proj_label), axis=0
-        )
-        diversity_model, _div_proj_acc = fit_div_proj(
-            div_proj_data,
-            div_proj_label,
-            latent_dim=2,
-        )
+    if archive is None:
+        # --- INITIALIZATION PHASE ---
+        # We need to generate a "warmup" population by adding noise to the initial solution.
         
-    return diversity_model
+        total_warmup = config.algorithm.warmup_pop_size
+        minibatch_size = config.algorithm.minibatch_size
+        
+        # Loop in mini-batches to generate noisy samples without OOM
+        for i in range(0, total_warmup, minibatch_size):
+            current_batch_size = min(minibatch_size, total_warmup - i)
+            
+            # Create a batch dictionary from the single init_solution
+            batch_sols = {}
+            for k, v in init_solution.items():
+                # Repeat (1, ...) -> (Batch, ...)
+                # Assumes v is on GPU/Device already
+                repeated = v.repeat(current_batch_size, *([1] * (v.ndim - 1)))
+                
+                # Add small noise to latents to ensure we get diverse features
+                if k == "latent":
+                    noise = torch.randn_like(repeated) * config.algorithm.warmup_latent_sigma
+                    repeated = repeated + noise
+                
+                batch_sols[k] = repeated
+
+            # Scoring returns 5 values now: fitnesses, qdhf_fitness, dreamsim, clip, images
+            _, _, dreamsim_feature, clip_feature, _ = scoring_function(batch_sols)
+            
+            # Move to CPU to save VRAM while collecting
+            all_clip_features.append(clip_feature)
+            all_dreamsim_features.append(dreamsim_feature)
+    else:
+        # --- UPDATE PHASE (FROM ARCHIVE) ---
+        # Get all current solutions. 
+        # archive.data() returns a dict: {'solution': {'latent': ...}, ...}
+        archive_data = archive.data(return_type="dict")
+        sols_dict = archive_data["solution"]
+        
+        # Get total number of solutions (length of first array in dict)
+        first_key = next(iter(sols_dict.keys()))
+        total_sols = len(sols_dict[first_key])
+        indices = np.arange(total_sols)
+        
+        # Process in mini-batches
+        n_batches = np.ceil(total_sols / config.algorithm.minibatch_size).astype(int)
+        
+        for i in range(n_batches):
+            start_idx = i * config.algorithm.minibatch_size
+            end_idx = min((i + 1) * config.algorithm.minibatch_size, total_sols)
+            batch_indices = indices[start_idx:end_idx]
+            
+            # Construct batch dict for scoring
+            batch_sols = {}
+            for k, v in sols_dict.items():
+                # Convert numpy -> torch -> device
+                # We use init_solution[first_key].device as reference for the correct GPU
+                ref_device = init_solution[first_key].device 
+                batch_sols[k] = torch.tensor(v[batch_indices]).to(ref_device)
+
+            # Evaluate batch
+            _, _, dreamsim_features, clip_features, _ = scoring_function(batch_sols)
+            
+            all_clip_features.append(clip_features.cpu())
+            all_dreamsim_features.append(dreamsim_features)
+
+    # --- TRAIN MODEL ---
+    
+    # Concatenate all collected features
+    # These become the pool we sample triplets from
+    all_clip_features = torch.cat(all_clip_features, dim=0)
+    all_dreamsim_features = torch.cat([torch.tensor(f) if not isinstance(f, torch.Tensor) else f for f in all_dreamsim_features], dim=0)
+    
+    # Prepare data for DivProj
+    n_samples = all_clip_features.shape[0]
+    
+    # Safety check for tiny archives
+    if n_samples < 3:
+        all_clip_features = all_clip_features.repeat(3, 1)
+        all_dreamsim_features = all_dreamsim_features.repeat(3, 1)
+        n_samples = all_clip_features.shape[0]
+
+    # Sample random triplets
+    div_proj_data = []
+    div_proj_labels = []
+    
+    # We sample indices (N, 3) directly instead of appending in a loop (faster/cleaner)
+    # Each row is [Ref, X1, X2]
+    triplet_indices = np.random.randint(0, n_samples, (config.algorithm.n_pref_data, 3))
+    
+    # Gather data using advanced indexing
+    div_proj_data = all_clip_features[triplet_indices]       # Shape: (n_pref_data, 3, Feat_Dim)
+    div_proj_labels = all_dreamsim_features[triplet_indices] # Shape: (n_pref_data, 3, Feat_Dim)
+
+    # Fit model
+    diversity_model, _div_proj_acc = fit_div_proj(
+        div_proj_data,
+        div_proj_labels,
+        latent_dim=config.algorithm.latent_dims, # Using config value
+    )
+    
+    if return_clip_features:
+        return diversity_model, all_clip_features
+    else:
+        return diversity_model
