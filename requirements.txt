@@ -32,6 +32,7 @@ ribs
 scikit-image
 scikit-learn
 scipy
+sentencepiece
 tensorboardx
 tensorflow-probability
 termcolor
