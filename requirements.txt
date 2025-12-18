@@ -6,6 +6,7 @@ brax
 chex
 diffusers
 dreamsim
+einops
 flax
 ftfy
 hydra-core
