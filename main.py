@@ -126,13 +126,11 @@ def main(config: DictConfig) -> None:
     
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
-    
-    init_latent = torch.randn(1, 4, 64, 64, device=device, generator=generator)
-        
+            
     pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution = setup_models(
         config,
         prompt,
-        init_latent,
+        generator,
         _initial_values_dir,
         device,
     )   

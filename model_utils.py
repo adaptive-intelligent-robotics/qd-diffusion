@@ -383,11 +383,12 @@ def generate_images_from_latents_sdxl_turbo(
 def setup_models(
     config,
     prompt,
-    init_latent,
+    generator,
     initial_values_dir,
     device,
 ):
     if config.model.name == "sd-1-5":
+        init_latent = torch.randn(1, 4, 64, 64, device=device, generator=generator)
         pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5").to(device)
         scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
         solution_schema = {
@@ -431,6 +432,7 @@ def setup_models(
         gc.collect()
             
     elif config.model.name == "sdxl-turbo":
+        init_latent = torch.randn(1, 4, 64, 64, device=device, generator=generator)
         pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo")
         pipe.to(device)
         solution_schema = {
