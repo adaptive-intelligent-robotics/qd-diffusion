@@ -25,6 +25,7 @@ numpy
 opencv-python
 optax
 optimum
+optimum-quanto
 pandas
 pillow
 protobuf
