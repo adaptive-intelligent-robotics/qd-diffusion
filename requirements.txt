@@ -24,6 +24,7 @@ notebook
 numpy
 opencv-python
 optax
+optimum
 pandas
 pillow
 protobuf
