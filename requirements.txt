@@ -2,6 +2,7 @@
 
 absl-py
 accelerate
+bitsandbytes
 brax
 chex
 diffusers
