@@ -99,6 +99,7 @@ def main(config: DictConfig) -> None:
     
     metrics = dict.fromkeys(["iteration",
         "qd_score",
+        "avg_fitness",
         "coverage",
         "max_fitness",
         "time",

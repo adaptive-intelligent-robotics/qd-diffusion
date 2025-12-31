@@ -87,6 +87,7 @@ def me_metrics_function(
         objectives = data["solution"]["dns_fitness"]
         descriptors = data["solution"]["dns_descriptor"]
         current_metrics["qd_score"] = np.sum(objectives)
+        current_metrics["avg_fitness"] = np.mean(objectives)
         current_metrics["max_fitness"] = np.max(objectives)
         
     else:
@@ -94,6 +95,7 @@ def me_metrics_function(
         objectives = data["objective"]
         
         current_metrics["qd_score"] = repertoire.stats.qd_score
+        current_metrics["avg_fitness"] = repertoire.stats.obj_mean
         current_metrics["max_fitness"] = repertoire.stats.obj_max
 
     current_metrics["coverage"] = repertoire.stats.coverage
