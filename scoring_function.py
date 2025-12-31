@@ -98,6 +98,13 @@ def scoring_function(
             solutions["pooled_prompt_embedding"],
             time_ids=time_ids,
         )
+    
+    elif model_name == "flux":
+        generated_images = generate_images_from_latents_fun(
+            solutions["latent"],
+            solutions["prompt_embedding"],
+            solutions["pooled_prompt_embedding"],
+        )
 
     generated_images_np = np.array(generated_images.cpu())
 
@@ -131,6 +138,14 @@ def qdhf_scoring_function(
             solutions["prompt_embedding"],
             solutions["pooled_prompt_embedding"],
             time_ids=time_ids,
+        )
+    
+    elif model_name == "flux":
+    
+        generated_images = generate_images_from_latents_fun(
+            solutions["latent"],
+            solutions["prompt_embedding"],
+            solutions["pooled_prompt_embedding"],
         )
 
     generated_images_np = np.array(generated_images.cpu())

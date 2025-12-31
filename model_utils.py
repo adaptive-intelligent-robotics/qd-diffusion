@@ -6,11 +6,16 @@ import os
 import torch
 from diffusers import (
     AutoPipelineForText2Image,
+    BitsAndBytesConfig,
     DDIMScheduler,
+    FluxPipeline,
+    FluxTransformer2DModel,
     StableDiffusionPipeline
 )
+from diffusers.pipelines.flux.pipeline_flux import calculate_shift
 from functools import partial
 from image_utils import save_image
+from optimum.quanto import freeze, qfloat8, quantize
 
 def toggle_prompt_embedding_shape(embedding):
     """
@@ -380,6 +385,123 @@ def generate_images_from_latents_sdxl_turbo(
     return images
 
 
+def get_flux_mu(pipe, latents):
+    """
+    Calculates the resolution-dependent density shift (mu).
+    Required by Flux to ensure timesteps match the image sequence length.
+    """
+    return calculate_shift(
+        latents.shape[1],
+        pipe.scheduler.config.get("base_image_seq_len", 256),
+        pipe.scheduler.config.get("max_image_seq_len", 4096),
+        pipe.scheduler.config.get("base_shift", 0.5),
+        pipe.scheduler.config.get("max_shift", 1.15),
+    )
+    
+def generate_images_from_latents_flux(
+    latents,
+    prompt_embedding,         
+    pooled_prompt_embedding,  
+    pipe,
+    text_ids,
+    latent_img_ids,
+    num_inference_steps,
+    guidance_scale,
+    height,
+    width,
+    micro_batch_size=1, # Change to 2 or 4 if you have plenty of VRAM headroom
+    device="cuda"
+):
+    """
+    Complete Flux generation function.
+    Handles NumPy/Tensor inputs, VRAM offloading, and batch dimension alignment.
+    """    
+    dtype = pipe.transformer.dtype
+    
+    # --- 1. Robust Type Handling Helper ---
+    def to_correct_tensor(x, is_pooled=False):
+        # Converts NumPy to Tensor or passes existing Tensors through
+        if not torch.is_tensor(x):
+            x = torch.as_tensor(x)
+        
+        x = x.to(device=device, dtype=dtype)
+        
+        # Remove redundant dimensions: [Batch, 1, Seq, Dim] -> [Batch, Seq, Dim]
+        if x.ndim == 4 and x.shape[1] == 1:
+            x = x.squeeze(1)
+            
+        # Ensure pooled embedding is 2D [Batch, Dim]
+        if is_pooled and x.ndim > 2:
+            x = x.view(x.shape[0], -1)
+            
+        return x
+
+    # Initial full-batch conversion (tensors stay on CPU until sliced if needed)
+    latents_all = to_correct_tensor(latents)
+    prompt_all = to_correct_tensor(prompt_embedding)
+    pooled_all = to_correct_tensor(pooled_prompt_embedding, is_pooled=True)
+    
+    total_samples = latents_all.shape[0]
+    all_images = []
+
+    # --- 2. Micro-Batch Loop ---
+    for i in range(0, total_samples, micro_batch_size):
+        # Slice the batch
+        m_latents = latents_all[i : i + micro_batch_size]
+        m_prompt = prompt_all[i : i + micro_batch_size]
+        m_pooled = pooled_all[i : i + micro_batch_size]
+        curr_batch_size = m_latents.shape[0]
+
+        # Setup Scheduler for this specific resolution/batch
+        mu = get_flux_mu(pipe, m_latents)
+        pipe.scheduler.set_timesteps(num_inference_steps, device=device, mu=mu)
+        timesteps = pipe.scheduler.timesteps
+        
+        # Setup Guidance
+        if pipe.transformer.config.guidance_embeds:
+            guidance = torch.full([curr_batch_size], guidance_scale, device=device, dtype=torch.float32)
+        else:
+            guidance = None
+
+        # --- 3. Denoising Loop ---
+        for t in timesteps:
+            timestep_input = t.expand(curr_batch_size).to(m_latents.dtype)
+
+            with torch.no_grad(), pipe.transformer.cache_context("cond"):
+                noise_pred = pipe.transformer(
+                    hidden_states=m_latents,
+                    timestep=timestep_input / 1000,
+                    guidance=guidance,
+                    pooled_projections=m_pooled,
+                    encoder_hidden_states=m_prompt,
+                    txt_ids=text_ids,
+                    img_ids=latent_img_ids,
+                    return_dict=False,
+                )[0]
+
+            # Flow Matching Euler Step
+            m_latents = pipe.scheduler.step(noise_pred, t, m_latents, return_dict=False)[0]
+
+        # --- 4. Decode Micro-Batch ---
+        # Unpack Flux latents (2x2) back to standard shapes
+        m_latents_unpacked = pipe._unpack_latents(m_latents, height, width, pipe.vae_scale_factor)
+        
+        # VAE Scaling/Shift
+        m_latents_unpacked = (m_latents_unpacked / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+        
+        with torch.no_grad():
+            m_imgs = pipe.vae.decode(m_latents_unpacked, return_dict=False)[0]
+            # Post-process and cast to float to avoid BFloat16 NumPy errors
+            m_imgs = pipe.image_processor.postprocess(m_imgs, output_type="pt").float()
+            all_images.append(m_imgs)
+
+        # --- 5. Clean up Micro-Batch ---
+        del m_latents, m_prompt, m_pooled, noise_pred
+        torch.cuda.empty_cache()
+
+    # Final concat of all micro-batches
+    return torch.cat(all_images, dim=0)
+
 def setup_models(
     config,
     prompt,
@@ -429,6 +551,8 @@ def setup_models(
         }
         
         del init_image, init_latent, init_prompt_embedding
+        text_ids = None
+        latent_img_ids = None
         gc.collect()
             
     elif config.model.name == "sdxl-turbo":
@@ -481,5 +605,96 @@ def setup_models(
         del init_image, init_latent, init_prompt_embedding, init_pooled_prompt_embedding    
         gc.collect()
         scheduler = None # already part of the pipeline object
+        text_ids = None
+        latent_img_ids = None
     
-    return pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution
+    elif config.model.name == "flux":
+        # Set up dir to write quanto cache
+        # os.makedirs("/tmp/quanto_cache", exist_ok=True)
+        
+        # pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=torch.bfloat16)
+
+        # Quantize the transformer only (this is where the bulk of the VRAM is)
+        # quantize(pipe.transformer, weights=qfloat8)
+        # freeze(pipe.transformer)
+        
+        quant_config = BitsAndBytesConfig(load_in_8bit=True)
+        
+        transformer = FluxTransformer2DModel.from_pretrained(
+            "black-forest-labs/FLUX.1-dev",
+            subfolder="transformer",
+            quantization_config=quant_config,
+            torch_dtype=torch.bfloat16
+        )
+
+        # 2. Load the Pipeline and pass the pre-quantized transformer
+        pipe = FluxPipeline.from_pretrained(
+            "black-forest-labs/FLUX.1-dev",
+            transformer=transformer,
+            torch_dtype=torch.bfloat16
+        )
+        pipe.to("cuda")
+        
+        # Flux uses packed latents; standard height/width are divided by 2
+        height, width = 1024, 1024 # Standard for Flux
+        num_channels_latents = pipe.transformer.config.in_channels // 4
+        latents_h = 2 * (int(height) // (pipe.vae_scale_factor * 2))
+        latents_w = 2 * (int(width) // (pipe.vae_scale_factor * 2))
+        
+        # Initial Noise
+        init_latent = torch.randn(1, num_channels_latents, latents_h, latents_w, 
+                                device=device, generator=generator, dtype=torch.bfloat16)
+        
+        # Pack and prepare IDs
+        init_latent = pipe._pack_latents(init_latent, 1, num_channels_latents, latents_h, latents_w)
+        latent_img_ids = pipe._prepare_latent_image_ids(1, latents_h // 2, latents_w // 2, 
+                                                    device=device, dtype=torch.float32)
+        
+        # Encode Prompt
+        prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(prompt, device=device)
+
+        solution_schema = {
+            "latent": init_latent.squeeze(0).shape,
+            "prompt_embedding": prompt_embeds.squeeze(0).shape,
+            "pooled_prompt_embedding": pooled_prompt_embeds.squeeze(0).shape,
+        }
+
+        # Partial for generation
+        generate_images_from_latents_fn = partial(generate_images_from_latents_flux,
+            pipe=pipe,
+            text_ids=text_ids,
+            latent_img_ids=latent_img_ids,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            height=height,
+            width=width,
+            device=device
+        )
+
+        init_image = generate_images_from_latents_fn(
+            latents=init_latent,
+            prompt_embedding=prompt_embeds,
+            pooled_prompt_embedding=pooled_prompt_embeds
+        )
+
+        # Save values
+        torch.save(prompt_embeds.cpu(), os.path.join(initial_values_dir, "initial_prompt_embedding.pt"))
+        torch.save(init_latent.cpu(), os.path.join(initial_values_dir, "initial_latent.pt"))
+        torch.save(pooled_prompt_embeds.cpu(), os.path.join(initial_values_dir, "initial_pooled_prompt_embedding.pt"))
+        save_image(init_image[0], os.path.join(initial_values_dir, "initial_image.png"))
+
+        initial_solution = {
+            "latent": init_latent.cpu(),
+            "prompt_embedding": prompt_embeds.cpu(),
+            "pooled_prompt_embedding": pooled_prompt_embeds.cpu(),
+        }
+
+        # --- VRAM Cleanup ---
+        # Deleting encoders and tokenizers as they are no longer needed in the QD loop
+        del pipe.text_encoder, pipe.text_encoder_2, pipe.tokenizer, pipe.tokenizer_2
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        scheduler = pipe.scheduler
+    
+    return pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution, text_ids, latent_img_ids

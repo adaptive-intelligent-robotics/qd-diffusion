@@ -21,6 +21,7 @@ from emitters.adam_emitter import AdamDictEmitter, prepare_adam_loss_fn
 from emitters.custom_sep_cma_es import CMAESDictEmitter
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
+from emitters.flux_hidden_layer_emitter import FluxHiddenLayerEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
@@ -127,7 +128,7 @@ def main(config: DictConfig) -> None:
     # Load Diffusion Model Pipelines
     logger.warning("--- Loading Models ---")
             
-    pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution = setup_models(
+    pipe, scheduler, generate_images_from_latents_fn, solution_schema, initial_solution, text_ids, latent_img_ids = setup_models(
         config,
         prompt,
         generator,
@@ -156,7 +157,7 @@ def main(config: DictConfig) -> None:
     if config.emitter.genotype == "multi":
         if config.model.name == "sd-1-5":
             batch_sizes = [config.batch_size // 2, config.batch_size - (config.batch_size // 2)]
-        elif config.model.name == "sdxl-turbo":
+        elif config.model.name == "sdxl-turbo" or config.model.name == "flux":
             batch_sizes = [config.batch_size // 3, config.batch_size // 3, config.batch_size - 2 * (config.batch_size // 3)]
     else:
         batch_sizes = [config.batch_size]
@@ -244,7 +245,7 @@ def main(config: DictConfig) -> None:
         )
         emitters = [emitter_1, emitter_2]
         
-        if config.model.name == "sdxl-turbo":
+        if config.model.name == "sdxl-turbo" or config.model.name == "flux":
             emitter_3 = GaussianDictEmitter(
                 archive=archive,
                 initial_solution=initial_solution,
@@ -288,7 +289,7 @@ def main(config: DictConfig) -> None:
         )
         emitters = [emitter_1, emitter_2]
         
-        if config.model.name == "sdxl-turbo":
+        if config.model.name == "sdxl-turbo" or config.model.name == "flux":
             emitter_3 = IsoLineDictEmitter(
                 archive=archive,
                 initial_solution=initial_solution,
@@ -338,6 +339,32 @@ def main(config: DictConfig) -> None:
             batch_size=config.batch_size,
             unet=pipe.unet,
             scheduler=pipe.scheduler,
+            alpha_min=config.emitter.alpha_min,
+            alpha_max=config.emitter.alpha_max,
+            sigma=config.emitter.sigma,
+            svd_k=config.emitter.svd_k,
+            svd_iters=config.emitter.svd_iters,
+            svd_fd_eps=config.emitter.svd_fd_eps,
+            svd_layer=config.emitter.svd_layer,
+            seed=config.seed,  
+            device=device,  
+        )
+    elif config.emitter.type == "hidden_layer" and config.model.name == "flux":
+        if config.emitter.model_type != "flux":
+            assert False, "Mismatch between emitter.model_type and model used"
+            
+        emitter = FluxHiddenLayerEmitter(
+            pipe=pipe,
+            archive=archive,
+            initial_solution=initial_solution,
+            text_ids=text_ids,
+            latent_img_ids=latent_img_ids,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            mutation_key=config.emitter.genotype,
+            mutation_type=config.emitter.mutation_type,
+            batch_size=config.batch_size,
+            hook_proportion=(config.emitter.hook_min, config.emitter.hook_max),
             alpha_min=config.emitter.alpha_min,
             alpha_max=config.emitter.alpha_max,
             sigma=config.emitter.sigma,
@@ -460,6 +487,79 @@ def main(config: DictConfig) -> None:
                 device=device,  
             )
             emitters = [emitter_1, emitter_2, emitter_3]
+        
+        elif config.model.name == "flux":
+            batch_size_1 = int(config.batch_size // 3)
+            batch_size_2 = int(config.batch_size // 3)
+            batch_size_3 = config.batch_size - batch_size_1 - batch_size_2
+            
+            emitter_1 = FluxHiddenLayerEmitter(
+                pipe=pipe,
+                archive=archive,
+                initial_solution=initial_solution,
+                text_ids=text_ids,
+                latent_img_ids=latent_img_ids,
+                num_inference_steps=config.model.num_inference_steps,
+                guidance_scale=config.model.guidance_scale,
+                mutation_key="latent",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_1,
+                hook_proportion=(config.emitter.hook_min, config.emitter.hook_max),
+                alpha_min=config.emitter.latent_alpha_min,
+                alpha_max=config.emitter.latent_alpha_max,
+                sigma=config.emitter.latent_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitter_2 = FluxHiddenLayerEmitter(
+                pipe=pipe,
+                archive=archive,
+                initial_solution=initial_solution,
+                text_ids=text_ids,
+                latent_img_ids=latent_img_ids,
+                num_inference_steps=config.model.num_inference_steps,
+                guidance_scale=config.model.guidance_scale,
+                mutation_key="prompt_embedding",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_2,
+                hook_proportion=(config.emitter.hook_min, config.emitter.hook_max),
+                alpha_min=config.emitter.prompt_embedding_alpha_min,
+                alpha_max=config.emitter.prompt_embedding_alpha_max,
+                sigma=config.emitter.prompt_embedding_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitter_3 = FluxHiddenLayerEmitter(
+                pipe=pipe,
+                archive=archive,
+                initial_solution=initial_solution,
+                text_ids=text_ids,
+                latent_img_ids=latent_img_ids,
+                num_inference_steps=config.model.num_inference_steps,
+                guidance_scale=config.model.guidance_scale,
+                mutation_key="pooled_prompt_embedding",
+                mutation_type=config.emitter.mutation_type,
+                batch_size=batch_size_3,
+                hook_proportion=(config.emitter.hook_min, config.emitter.hook_max),
+                alpha_min=config.emitter.pooled_prompt_embedding_alpha_min,
+                alpha_max=config.emitter.pooled_prompt_embedding_alpha_max,
+                sigma=config.emitter.pooled_prompt_embedding_sigma,
+                svd_k=config.emitter.svd_k,
+                svd_iters=config.emitter.svd_iters,
+                svd_fd_eps=config.emitter.svd_fd_eps,
+                svd_layer=config.emitter.svd_layer,
+                seed=config.seed,  
+                device=device,  
+            )
+            emitters = [emitter_1, emitter_2, emitter_3]
             
     elif config.emitter.type == "random_seeds":
         emitter = RandomSeedEmitter(
@@ -494,7 +594,7 @@ def main(config: DictConfig) -> None:
             if config.model.name == "sd-1-5":
                 max_pop_size = 2
                 batch_sizes = [1, 1]
-            elif config.model.name == "sdxl-turbo":
+            elif config.model.name == "sdxl-turbo" or config.model.name == "flux":
                 max_pop_size = 3
                 batch_sizes = [1, 1, 1]
         
@@ -601,7 +701,7 @@ def main(config: DictConfig) -> None:
             )
             emitters = [emitter_1, emitter_2]
             
-            if config.model.name == "sdxl-turbo":
+            if config.model.name == "sdxl-turbo" or config.model.name == "flux":
                 adam_loss_fn_3 = prepare_adam_loss_fn(
                     config,
                     "pooled_prompt_embedding",
@@ -683,7 +783,7 @@ def main(config: DictConfig) -> None:
                 bounds=None
             )
             emitters = [emitter_1, emitter_2]
-            if config.model.name == "sdxl-turbo":
+            if config.model.name == "sdxl-turbo" or config.model.name == "flux":
                 emitter_3 = CMAESDictEmitter(
                     archive=archive,
                     initial_solution=initial_solution,

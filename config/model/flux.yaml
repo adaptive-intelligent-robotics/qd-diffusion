@@ -1,0 +1,3 @@
+name: "flux"
+num_inference_steps: 30
+guidance_scale: 3.5

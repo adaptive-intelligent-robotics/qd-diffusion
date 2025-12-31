@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.typing import DTypeLike
 
 from ribs._utils import (
     validate_batch,
@@ -20,7 +21,6 @@ class DNSDictArchive(ArchiveBase):
     def __init__(
         self,
         *,
-        # solution_dim can now be a dict, e.g. {'latents': (4,64,64), 'embeds': (77,768)}
         solution_dim, 
         measure_dim,
         max_size,
@@ -29,12 +29,12 @@ class DNSDictArchive(ArchiveBase):
         distance_metric="euclidean",
         qd_score_offset=0.0,
         seed=None,
-        dtype=np.float64,
+        solution_dtype: DTypeLike = None,
+        objective_dtype: DTypeLike = None,
+        measures_dtype: DTypeLike = None,
+        dtype: DTypeLike = None,
         extra_fields=None,
     ):
-        # Ribs base expects a tuple/int for solution_dim. 
-        # We pass a dummy empty tuple to super() to bypass base checks, 
-        # and handle the schema ourselves.
         super().__init__(
             solution_dim=(), 
             objective_dim=(),
@@ -47,22 +47,37 @@ class DNSDictArchive(ArchiveBase):
         self._distance_metric = distance_metric
         self._rng = np.random.default_rng(seed)
         self._qd_score_offset = qd_score_offset
-        self._dtypes = parse_dtype(dtype)
         self._extra_fields = extra_fields or {}
-        self._field_list = ["solution", "objective", "measures"] + list(self._extra_fields.keys())
+
+        # --- 1. DTYPE HANDLING (The Fix) ---
+        default_dtype = dtype if dtype is not None else np.float64
         
-        # --- SOLUTION SCHEMA HANDLING ---
+        # Helper to check specific arg -> dict key -> default scalar
+        def get_dt(target, key):
+            if target is not None: return target
+            if isinstance(default_dtype, dict): return default_dtype.get(key, np.float64)
+            return default_dtype
+
+        self._dtypes = {
+            "solution": get_dt(solution_dtype, "solution"),
+            "objective": get_dt(objective_dtype, "objective"),
+            "measures": get_dt(measures_dtype, "measures"),
+        }
+
+        # --- 2. SCHEMA HANDLING ---
         if isinstance(solution_dim, dict):
             self._solution_schema = solution_dim
             self._is_structured = True
         else:
-            # Fallback for standard usage
             shape = (solution_dim,) if isinstance(solution_dim, int) else solution_dim
             self._solution_schema = {"data": shape}
             self._is_structured = False
 
-        # --- ALLOCATE STORAGE ---
-        # self._solutions is now a DICT of arrays
+        self._field_list = ["solution", "objective", "measures"] + list(self._extra_fields.keys())
+
+        # --- 3. STORAGE ALLOCATION (Buffer Style - No ArrayStore) ---
+        
+        # A. Solution Storage (Parallel Dictionary)
         self._solutions = {}
         for key, shape in self._solution_schema.items():
             self._solutions[key] = np.empty(
@@ -70,6 +85,7 @@ class DNSDictArchive(ArchiveBase):
                 dtype=self._dtypes["solution"]
             )
 
+        # B. Metadata Storage
         self._objectives = np.full(
             (self._max_size,), -np.inf, dtype=self._dtypes["objective"]
         )
@@ -77,6 +93,7 @@ class DNSDictArchive(ArchiveBase):
             (self._max_size, self.measure_dim), dtype=self._dtypes["measures"]
         )
 
+        # C. Extra Fields Storage
         self._extra_field_arrays = {}
         for name, (shape, dt) in self._extra_fields.items():
             self._extra_field_arrays[name] = np.empty(
@@ -85,7 +102,7 @@ class DNSDictArchive(ArchiveBase):
             
         self._num_elites = 0
         self._stats_reset()
-
+        
     # ... (Keep _stats_reset and properties same as before) ...
     
     def _stats_reset(self):

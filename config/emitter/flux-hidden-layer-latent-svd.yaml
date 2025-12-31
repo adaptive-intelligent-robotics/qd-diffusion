@@ -1,0 +1,16 @@
+name: "flux-hidden-layer-latent-svd"
+type: "hidden_layer"
+genotype: "latent"
+mutation_type: "svd"
+model_type: "flux"
+
+alpha_min: -1
+alpha_max: 1
+svd_k: 3
+svd_iters: 5
+svd_fd_eps: 1e-3
+svd_layer: "transformer_blocks.5"
+hook_min: 0.2
+hook_max: 0.8
+
+sigma: 0.4 # not used here
