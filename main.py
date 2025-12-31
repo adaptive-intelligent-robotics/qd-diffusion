@@ -1,5 +1,5 @@
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
 import gc
