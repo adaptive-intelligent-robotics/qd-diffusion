@@ -17,7 +17,6 @@ from ribs.archives._archive_stats import ArchiveStats
 from ribs.archives._array_store import ArrayStore
 from ribs.archives._utils import (
     fill_sentinel_values,
-    parse_dtype,
     validate_cma_mae_settings,
 )
 
@@ -72,8 +71,21 @@ class CVTDictArchive(ArchiveBase):
         if reserved_fields & extra_fields.keys():
             raise ValueError(f"Reserved fields: {reserved_fields}")
         
-        # [FIX] Store parsed dtypes to access "solution" dtype later
-        self._dtypes = parse_dtype(dtype)
+        # --- DTYPE HANDLING ---
+        default_dtype = dtype if dtype is not None else np.float64
+        
+        # Helper to resolve dtype
+        def get_dt(key):
+            if isinstance(default_dtype, dict):
+                return default_dtype.get(key, np.float64)
+            return default_dtype
+        
+        self._dtypes = {
+            "solution": get_dt("solution"),
+            "objective": get_dt("objective"),
+            "measures": get_dt("measures"),
+            "threshold": get_dt("objective"),
+        }
 
         # --- MODIFICATION START: Flatten Schema into Field Desc ---
         # Instead of one "solution" field, we create fields for every key in the dict
@@ -105,7 +117,7 @@ class CVTDictArchive(ArchiveBase):
         self._learning_rate, self._threshold_min = validate_cma_mae_settings(
             learning_rate, threshold_min, self.dtypes["threshold"]
         )
-        self._qd_score_offset = self.dtypes["objective"](qd_score_offset)
+        self._qd_score_offset = np.asarray(qd_score_offset, dtype=self.dtypes["objective"])
 
         self._best_elite = None
         self._objective_sum = None
@@ -264,12 +276,13 @@ class CVTDictArchive(ArchiveBase):
 
     def _stats_reset(self):
         self._best_elite = None
-        self._objective_sum = self.dtypes["objective"](0.0)
+        dtype = self.dtypes["objective"]
+        self._objective_sum = np.asarray(0.0, dtype=dtype)
         self._stats = ArchiveStats(
             num_elites=0,
-            coverage=self.dtypes["objective"](0.0),
-            qd_score=self.dtypes["objective"](0.0),
-            norm_qd_score=self.dtypes["objective"](0.0),
+            coverage=np.asarray(0.0, dtype=dtype),
+            qd_score=np.asarray(0.0, dtype=dtype),
+            norm_qd_score=np.asarray(0.0, dtype=dtype),
             obj_max=None,
             obj_mean=None,
         )
@@ -295,15 +308,16 @@ class CVTDictArchive(ArchiveBase):
             new_obj_max = self._stats.obj_max
 
         self._objective_sum = new_objective_sum
-        new_qd_score = (self._objective_sum - self.dtypes["objective"](len(self)) * self._qd_score_offset)
+        dtype = self.dtypes["objective"]
+        new_qd_score = (self._objective_sum - np.asarray(len(self), dtype=dtype) * self._qd_score_offset)
         
         self._stats = ArchiveStats(
             num_elites=len(self),
-            coverage=self.dtypes["objective"](len(self) / self.cells),
+            coverage=np.asarray(len(self) / self.cells, dtype=dtype),
             qd_score=new_qd_score,
-            norm_qd_score=self.dtypes["objective"](new_qd_score / self.cells),
+            norm_qd_score=np.asarray(new_qd_score / self.cells, dtype=dtype),
             obj_max=new_obj_max,
-            obj_mean=self.dtypes["objective"](self._objective_sum / len(self)),
+            obj_mean=np.asarray(self._objective_sum / len(self), dtype=dtype),
         )
 
     def index_of(self, measures):
@@ -422,7 +436,7 @@ class CVTDictArchive(ArchiveBase):
         add_info["status"][improve_existing] = 1
 
         cur_threshold[is_new] = (
-            self.dtypes["threshold"](0.0)
+            np.asarray(0.0, dtype=self.dtypes["threshold"])
             if self.threshold_min == -np.inf
             else self.threshold_min
         )

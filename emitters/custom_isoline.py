@@ -40,6 +40,8 @@ class IsoLineDictEmitter(EmitterBase):
             archive=archive,
             solution_dim=(),
             bounds=bounds,
+            upper_bounds=None,
+            lower_bounds=None,
         )
         
         self.genotype_key = genotype_key

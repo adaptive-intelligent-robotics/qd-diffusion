@@ -40,6 +40,8 @@ class RandomSeedEmitter(EmitterBase):
             archive=archive,
             solution_dim=(),
             bounds=bounds,
+            lower_bounds=None,
+            upper_bounds=None,
         )
         
         self.latent_key = latent_key

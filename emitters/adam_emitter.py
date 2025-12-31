@@ -37,7 +37,7 @@ class AdamDictEmitter(EmitterBase):
         emitter_id: int = 0,
     ):
         self._solution_schema = archive.solution_dim
-        super().__init__(archive=archive, solution_dim=(), bounds=bounds)
+        super().__init__(archive=archive, solution_dim=(), bounds=bounds, lower_bounds=None, upper_bounds=None)
 
         if initial_solution is None:
             raise ValueError("initial_solution must be provided.")

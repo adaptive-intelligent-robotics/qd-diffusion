@@ -35,17 +35,21 @@ class PassivePopulationArchive(ArchiveBase):
     def __init__(
         self,
         *,
-        solution_dim: Union[Dict, tuple, int],
-        measure_dim: int,
+        solution_dim,
+        measure_dim,
         population_size: int,
         dtype=np.float64,
-        seed: Optional[int] = None,
-        extra_fields: Optional[Dict] = None,
+        seed=None,
+        extra_fields=None,
         qd_score_offset: float = 0.0,
-        batch_sizes: Optional[list] = None,
+        batch_sizes=None,
+        # Allow specific dtypes if needed, matching the pattern
+        solution_dtype=None,
+        objective_dtype=None,
+        measures_dtype=None,
     ):
         """Initialize the PassivePopulationArchive."""
-        # Pass dummy values to base class (we handle schema ourselves)
+        # Pass dummy values to base class
         super().__init__(
             solution_dim=(),
             objective_dim=(),
@@ -54,20 +58,34 @@ class PassivePopulationArchive(ArchiveBase):
 
         self._population_size = population_size
         self._rng = np.random.default_rng(seed)
-        self._dtypes = parse_dtype(dtype)
-        self._extra_fields = extra_fields or {}
-        self._field_list = ["solution", "objective", "measures"] + list(self._extra_fields.keys())
         self._qd_score_offset = qd_score_offset
         self._batch_sizes = batch_sizes or []
+        self._extra_fields = extra_fields or {}
         
-        # Compute emitter's start and end indices
+        # --- 1. DTYPE HANDLING (The Fix) ---
+        default_dtype = dtype if dtype is not None else np.float64
+        
+        def get_dt(target, key):
+            if target is not None: return target
+            if isinstance(default_dtype, dict): return default_dtype.get(key, np.float64)
+            return default_dtype
+
+        self._dtypes = {
+            "solution": get_dt(solution_dtype, "solution"),
+            "objective": get_dt(objective_dtype, "objective"),
+            "measures": get_dt(measures_dtype, "measures"),
+        }
+        
+        self._field_list = ["solution", "objective", "measures"] + list(self._extra_fields.keys())
+
+        # --- 2. INDEX HANDLING ---
         self._emitter_start_idx = 0
-        self._emitter_end_idx = population_size  # Default: entire population
+        self._emitter_end_idx = population_size
         self.start_idxs = []
         self.end_idxs = []
-        if batch_sizes and len(batch_sizes) > 0:
+        if self._batch_sizes and len(self._batch_sizes) > 0:
             cum_sum = 0
-            for size in batch_sizes:
+            for size in self._batch_sizes:
                 self.start_idxs.append(cum_sum)
                 cum_sum += size
                 self.end_idxs.append(cum_sum)
@@ -75,18 +93,16 @@ class PassivePopulationArchive(ArchiveBase):
             self.start_idxs.append(0)
             self.end_idxs.append(population_size)
 
-        # --- SOLUTION SCHEMA HANDLING ---
+        # --- 3. SOLUTION SCHEMA HANDLING ---
         if isinstance(solution_dim, dict):
             self._solution_schema = solution_dim
             self._is_structured = True
         else:
-            # Fallback for standard usage
             shape = (solution_dim,) if isinstance(solution_dim, int) else solution_dim
             self._solution_schema = {"data": shape}
             self._is_structured = False
 
-        # --- ALLOCATE STORAGE ---
-        # self._solutions is a DICT of arrays
+        # --- 4. ALLOCATE STORAGE ---
         self._solutions = {}
         for key, shape in self._solution_schema.items():
             self._solutions[key] = np.empty(

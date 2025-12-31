@@ -33,7 +33,7 @@ class ImageBreederEmitter(EmitterBase):
         bounds = None,
     ):
         self._solution_schema = archive.solution_dim 
-        super().__init__(archive=archive, solution_dim=(), bounds=bounds)
+        super().__init__(archive=archive, solution_dim=(), bounds=bounds, lower_bounds=None, upper_bounds=None)
         
         self.mutation_type = mutation_type
         self.batch_size = batch_size

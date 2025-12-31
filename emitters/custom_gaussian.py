@@ -24,6 +24,8 @@ class GaussianDictEmitter(EmitterBase):
             archive=archive,
             solution_dim=(),
             bounds=bounds,
+            lower_bounds=None,
+            upper_bounds=None,
         )
         
         self.genotype_key = genotype_key

@@ -9,7 +9,6 @@ import warnings
 import numba as nb
 import numpy as np
 
-from ribs._utils import readonly
 from ribs.emitters.opt._evolution_strategy_base import (
     BOUNDS_SAMPLING_THRESHOLD,
     BOUNDS_WARNING,
@@ -37,7 +36,7 @@ class CMAESDictEmitter(EmitterBase):
         # We handle the solution schema manually, so we pass solution_dim=() to base
         self._solution_schema = archive.solution_dim
         self._num_parents = num_parents
-        super().__init__(archive=archive, solution_dim=(), bounds=bounds)
+        super().__init__(archive=archive, solution_dim=(), bounds=bounds, lower_bounds=None, upper_bounds=None)
         
         # Instantiate the Optimizer (The class you provided in the previous turn)
         self.es = SeparableCMAESDict(
