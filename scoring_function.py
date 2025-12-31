@@ -14,9 +14,11 @@ def fitness_function(generated_images,
 ):
     # Normalize images to match CLIP's expected range
     # CLIP expects images in [0, 1] → then normalized to mean/std
+    mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(generated_images.device)
+    std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(generated_images.device)
+    
     normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
-    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
-
+    normalized_images = (normalized_images - mean[None, :, None, None]) / std[None, :, None, None]  # normalize to mean/std
     # Tokenize prompt (no gradients needed)
     text_inputs = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
 
@@ -51,8 +53,10 @@ def qdhf_fitness_function(
 ):
     
     """Computes CLIP scores for a batch of images and a given text prompt."""
+    mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(generated_images.device)
+    std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(generated_images.device)
     normalized_images = F.interpolate(generated_images, size=224, mode='bilinear')  # resize to 224x224
-    normalized_images = (normalized_images - 0.5) / 0.5  # normalize to [-1, 1] — assuming input is [0, 1]
+    normalized_images = (normalized_images - mean[None, :, None, None]) / std[None, :, None, None]  # normalize to mean/std
 
     # img_tensor = torch.stack([CLIP_PREPROCESS(img) for img in imgs]).to(DEVICE)
     tokenized_text = clip_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(generated_images.device)
