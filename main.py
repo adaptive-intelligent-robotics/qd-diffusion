@@ -73,8 +73,17 @@ def main(config: DictConfig) -> None:
     else:
         prompt = config.prompt
         
-    prompt_tag = prompt[:64]
-    
+    def make_safe_tag(text, max_bytes=64):
+        # Normalize unicode characters to standard ASCII where possible
+        text = text.replace("’", "'").replace("“", '"').replace("”", '"')
+        
+        # Encode to bytes, truncate, and decode back, ignoring incomplete chars
+        encoded = text.encode('utf-8')[:max_bytes]
+        return encoded.decode('utf-8', 'ignore').strip()
+
+    # Usage
+    prompt_tag = make_safe_tag(prompt)   
+     
     # Initialise wandb
     wandb.init(
         project=f"Latent Exploration",
