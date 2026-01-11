@@ -630,10 +630,17 @@ def main(config: DictConfig) -> None:
         )
         
         # Enable gradient checkpointing to reduce memory usage
-        pipe.unet.enable_gradient_checkpointing()
         if hasattr(pipe.vae, 'enable_gradient_checkpointing'):
             pipe.vae.enable_gradient_checkpointing()
-            
+        
+        if hasattr(pipe, 'unet'):
+            if hasattr(pipe.unet, 'enable_gradient_checkpointing'):
+                pipe.unet.enable_gradient_checkpointing()
+        
+        if hasattr(pipe, 'transformer'):
+            if hasattr(pipe.transformer, 'enable_gradient_checkpointing'):
+                pipe.transformer.enable_gradient_checkpointing()
+
         if config.emitter.genotype != "multi":
             adam_loss_fn = prepare_adam_loss_fn(
                 config,
