@@ -10,11 +10,13 @@ dreamsim
 einops
 flax
 ftfy
+hpsv2
 hydra-core
 hydra-joblib-launcher
 ipython
 ipykernel
 imageio
+image-reward
 jax[cuda12]==0.5.1
 jaxlib[cuda12]==0.5.1
 jumanji
@@ -36,6 +38,7 @@ ribs
 scikit-image
 scikit-learn
 scipy
+simple-aesthetics-predictor
 sentencepiece
 tensorboardx
 tensorflow-probability
