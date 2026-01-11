@@ -657,6 +657,7 @@ def setup_models(
             "latent": init_latent.squeeze(0).shape,
             "prompt_embedding": prompt_embeds.squeeze(0).shape,
             "pooled_prompt_embedding": pooled_prompt_embeds.squeeze(0).shape,
+            "image": (3, height, width),
         }
 
         # Partial for generation
