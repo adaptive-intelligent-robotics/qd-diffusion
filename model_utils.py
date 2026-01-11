@@ -225,8 +225,14 @@ def plot_repertoire_images(
     num_sols = images.shape[0]
     
     generated_images_np = images.transpose(0, 2, 3, 1)
-    generated_images_np = (generated_images_np + 1) / 2
-    generated_images_np = np.clip(generated_images_np, 0, 1)
+    # Normalize images based on model type
+    if config.model.name == "flux":
+        # Flux images are already in [0, 1] range after postprocessing
+        generated_images_np = np.clip(generated_images_np, 0, 1)
+    else:
+        # SD models output in [-1, 1] range, need to normalize to [0, 1]
+        generated_images_np = (generated_images_np + 1) / 2
+        generated_images_np = np.clip(generated_images_np, 0, 1)
     
     # Determine grid size
     cols = math.ceil(np.sqrt(config.max_pop_size))
