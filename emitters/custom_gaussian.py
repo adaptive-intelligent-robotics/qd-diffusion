@@ -40,8 +40,8 @@ class GaussianDictEmitter(EmitterBase):
         self._seed_sol = {}
         for k, v in initial_solution.items():
             if isinstance(v, torch.Tensor):
-                # Detach from graph, move to CPU, convert to numpy
-                self._seed_sol[k] = v.detach().cpu().numpy()
+                # Convert to float32 to handle bfloat16 (numpy doesn't support bfloat16)
+                self._seed_sol[k] = v.detach().cpu().float().numpy()
             else:
                 # Ensure it's a numpy array
                 self._seed_sol[k] = np.array(v)

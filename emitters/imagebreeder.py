@@ -47,7 +47,8 @@ class ImageBreederEmitter(EmitterBase):
         self._seed_sol = {}
         for k, v in initial_solution.items():
             if isinstance(v, torch.Tensor):
-                self._seed_sol[k] = v.detach().cpu().numpy()
+                # Convert to float32 to handle bfloat16 (numpy doesn't support bfloat16)
+                self._seed_sol[k] = v.detach().cpu().float().numpy()
             else:
                 self._seed_sol[k] = np.array(v)
 
