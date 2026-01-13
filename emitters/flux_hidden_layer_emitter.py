@@ -141,7 +141,7 @@ def compute_flux_svd_basis(pipe, x_t, t_val, prompt_embeds, pooled_prompt_embeds
         for __ in range(iters):
             # Forward Finite Difference for Jv
             with torch.no_grad():
-                current_eps = eps 
+                current_eps = eps
                 l, p, pp = l_base.clone(), p_base.clone(), pp_base.clone()
                 if mutation_key == "latent": l += current_eps * v
                 elif mutation_key == "prompt_embedding": p += current_eps * v
@@ -160,9 +160,15 @@ def compute_flux_svd_basis(pipe, x_t, t_val, prompt_embeds, pooled_prompt_embeds
             # Orthogonalize and normalize
             v_new = grad
             for p in basis: v_new -= (v_new.flatten() @ p.flatten()) * p
+            
+            # Check norm before normalization
+            if v_new.norm().item() < 1e-10:
+                break
+                
             v = (v_new / (v_new.norm() + 1e-8)).detach()
             
         basis.append(v)
+    
     return basis
 
 # =============================================================================
@@ -190,7 +196,7 @@ class FluxHiddenLayerEmitter(EmitterBase):
         svd_layer: str = "transformer_blocks.5",
         svd_k: int = 5,
         svd_iters: int = 5,
-        svd_fd_eps: float = 1e-3,
+        svd_fd_eps: float = 1e-1,
         guidance_scale: float = 3.5,
         device: str = "cuda"
     ):
@@ -297,11 +303,13 @@ class FluxHiddenLayerEmitter(EmitterBase):
             
             # Select Direction (SVD Basis or Random Gaussian)
             if self.mutation_type == "svd":
-                direction = basis[self._rng.integers(len(basis))]
+                direction_idx = self._rng.integers(len(basis))
+                direction = basis[direction_idx]
             else:
                 # Direction matches the shape of the mutation target
                 target_shape = x_t.shape if self.mutation_key == "latent" else p_embeds.shape if self.mutation_key == "prompt_embedding" else p_pooled.shape
                 direction = torch.randn(target_shape, device=self.device, dtype=self.pipe.transformer.dtype)
+                direction_idx = None
 
             # Local copies for this batch element
             curr_p = p_embeds.clone()
