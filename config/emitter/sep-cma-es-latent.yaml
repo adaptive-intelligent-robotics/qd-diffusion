@@ -1,4 +1,0 @@
-name: "sep-cma-es-latent"
-type: "sep-cma-es"
-genotype: "latent"
-sigma: 0.1

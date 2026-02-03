@@ -1,4 +1,0 @@
-name: "gaussian-noise-latent"
-type: "gaussian"
-genotype: "latent"
-sigma: 0.1

@@ -1,5 +1,0 @@
-name: "adam-prompt-embed"
-type: "adam"
-genotype: "prompt_embedding"
-learning_rate: 0.01
-steps: 1

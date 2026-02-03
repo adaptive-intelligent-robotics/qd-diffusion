@@ -1,4 +1,0 @@
-name: "gaussian-noise-prompt-embed"
-type: "gaussian"
-genotype: "prompt_embedding"
-sigma: 0.2

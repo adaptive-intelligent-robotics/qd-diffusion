@@ -1,5 +1,0 @@
-name: "adam-pooled"
-type: "adam"
-genotype: "pooled_prompt_embedding"
-learning_rate: 0.01
-steps: 1
