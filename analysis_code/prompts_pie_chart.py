@@ -64,12 +64,13 @@ def generate_pie_charts():
         autopct='%1.1f%%', 
         startangle=140, 
         colors=colors,
-        pctdistance=0.85
+        pctdistance=0.7
     )
-    ax1.set_title("Distribution by Category")
+    ax1.set_title("Distribution by Category", fontsize=20, weight="bold")
 
     # Make percent labels smaller
-    plt.setp(autotexts1, size=8, weight="bold", color="white")
+    plt.setp(autotexts1, size=18, weight="bold", color="white")
+    plt.setp(texts1, size=16)
 
     # 4. Create Challenge Level Pie Chart
     wedges2, texts2, autotexts2 = ax2.pie(
@@ -78,18 +79,19 @@ def generate_pie_charts():
         autopct='%1.1f%%', 
         startangle=140, 
         colors=colors,
-        pctdistance=0.85
+        pctdistance=0.7
     )
-    ax2.set_title("Distribution by Challenge Level")
+    ax2.set_title("Distribution by Challenge Level", fontsize=20, weight="bold")
     
     # Make percent labels smaller
-    plt.setp(autotexts2, size=8, weight="bold", color="white")
+    plt.setp(autotexts2, size=18, weight="bold", color="white")
+    plt.setp(texts2, size=16)
 
     # Layout adjustment
     plt.tight_layout()
     
     # Save the figure
-    output_filename = "figures/prompts_distribution.png"
+    output_filename = "analysis_output/prompts_distribution.png"
     plt.savefig(output_filename)
     print(f"Chart saved as {output_filename}")
 

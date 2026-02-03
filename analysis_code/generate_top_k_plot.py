@@ -125,13 +125,40 @@ def generate_top_k_grids(root_dir, seeds, algorithm_dicts, k=16, metric="fitness
                         
                         scores_np = calculate_dns_scores(fitnesses.numpy(), descriptors.numpy())
                         scores = torch.from_numpy(scores_np)
+                    elif metric == "mixed":
+                        # First, get top half by fitness
+                        if not os.path.exists(desc_path):
+                            print(f"  !! Missing descriptors for seed {seed}. Skipping.")
+                            continue
+                        
+                        descriptors = torch.load(desc_path, map_location="cpu", weights_only=False)
+                        if isinstance(descriptors, np.ndarray): descriptors = torch.from_numpy(descriptors)
+                        
+                        # Sort by fitness and take top half
+                        fitness_sorted_indices = torch.argsort(fitnesses, descending=True)
+                        half_size = len(fitnesses) // 2
+                        top_half_indices = fitness_sorted_indices[:half_size]
+                        
+                        # Calculate DNS scores only on top half
+                        top_half_fitnesses = fitnesses[top_half_indices].numpy()
+                        top_half_descriptors = descriptors[top_half_indices].numpy()
+                        dns_scores_np = calculate_dns_scores(top_half_fitnesses, top_half_descriptors)
+                        
+                        # Sort by DNS and get top k indices (relative to top_half)
+                        dns_scores = torch.from_numpy(dns_scores_np)
+                        dns_sorted_indices = torch.argsort(dns_scores, descending=True)
+                        top_k_in_half = dns_sorted_indices[:k]
+                        
+                        # Map back to original indices
+                        top_indices = top_half_indices[top_k_in_half]
                     else:
                         # Default to fitness
                         scores = fitnesses
 
-                    # Sort Descending (Inf/High Fitness is better)
-                    sorted_indices = torch.argsort(scores, descending=True)
-                    top_indices = sorted_indices[:k]
+                    # Sort Descending (Inf/High Fitness is better) - only if not "mixed"
+                    if metric != "mixed":
+                        sorted_indices = torch.argsort(scores, descending=True)
+                        top_indices = sorted_indices[:k]
                     
                     top_images_tensors = images_tensor[top_indices]
                     pil_images = [tensor_to_pil(t) for t in top_images_tensors]

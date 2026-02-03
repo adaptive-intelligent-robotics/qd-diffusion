@@ -3,26 +3,35 @@ from pathlib import Path
 from collections import defaultdict
 
 # --- Configuration ---
+# BASE_ROOT = Path("/workspace/src/output/sdxl-turbo")
 BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
+
 EXPECTED_SEEDS = range(1, 37)  # Seeds 1-36
 
 # Algorithm paths to check
+# ALGORITHM_PATHS = {
+#     "dns_svd": "dns/multi-hidden-layer-multi-svd-alpha-20",
+#     "dns_svd_alpha_1": "dns/multi-hidden-layer-multi-svd-alpha-1",
+#     "dns_svd_alpha_10": "dns/multi-hidden-layer-multi-svd-alpha-10",
+#     "dns_svd_alpha_5": "dns/multi-hidden-layer-multi-svd-alpha-5",
+#     "dns_random": "dns/random-seeds",
+#     "dns_hidden_gaussian": "dns/multi-hidden-layer-gaussian",
+#     "dns_gaussian": "dns/multi-gaussian",
+#     "dns_mixed": "dns/mixed-all",
+#     "dns_isoline": "dns/multi-isoline",
+#     "cvt-map-elites": "cvt-map-elites/multi-hidden-layer-multi-svd-alpha-20",
+#     "qdhf": "qdhf/multi-hidden-layer-multi-svd-alpha-20",
+#     "adam": "dns/multi-adam",
+#     "cma-es": "dns/multi-sep-cma-es",
+#     "ablation": "dns/multi-hidden-layer-multi-svd-threshold-0-alpha-20",
+#     "ablation-alpha-10": "dns/multi-hidden-layer-multi-svd-threshold-0-alpha-10",
+# }
+
 ALGORITHM_PATHS = {
-    "dns_svd": "dns/multi-hidden-layer-multi-svd",
-    "dns_svd_alpha_1": "dns/multi-hidden-layer-multi-svd-alpha-1",
-    "dns_svd_alpha_10": "dns/multi-hidden-layer-multi-svd-alpha-10",
-    "dns_svd_alpha_5": "dns/multi-hidden-layer-multi-svd-alpha-5",
-    "dns_random": "dns/random-seeds",
-    "dns_hidden_gaussian": "dns/multi-hidden-layer-gaussian",
-    "dns_gaussian": "dns/multi-gaussian",
-    "dns_mixed": "dns/mixed-all",
-    "dns_isoline": "dns/multi-isoline",
-    "cvt-map-elites": "cvt-map-elites/multi-hidden-layer-multi-svd",
-    "qdhf": "qdhf/multi-hidden-layer-multi-svd",
-    "adam": "dns/multi-adam",
-    "cma-es": "dns/multi-sep-cma-es",
-    "ablation": "dns/multi-hidden-layer-multi-svd-threshold-0",
-}
+    "dns_svd_latent": "dns/sdxl-hidden-layer-latent-svd",
+    "dns_svd_pooled": "dns/sdxl-hidden-layer-pooled-svd",
+    "dns_svd_prompt": "dns/sdxl-hidden-layer-prompt-embed-svd",
+}  
 
 def count_seeds_for_algorithm(algo_path):
     """

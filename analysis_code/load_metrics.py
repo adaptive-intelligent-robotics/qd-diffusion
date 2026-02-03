@@ -98,6 +98,12 @@ def load_metrics(
                 for metric in metrics_list:
                     if metric in df.columns:
                         algo_raw_values[metric].append(df[metric].values)
+                    elif metric == "num_solutions":
+                        if 'coverage' in df.columns:
+                            algo_raw_values[metric].append(df['coverage'].values * 64)
+                    elif metric == "total_fitness":
+                        if 'coverage' in df.columns and 'avg_fitness' in df.columns:
+                            algo_raw_values[metric].append(df['coverage'].values * 64 * df['avg_fitness'].values)
                     else:
                         print(f"    !! Metric {metric} missing in CSV for seed {seed}")
 
@@ -119,9 +125,9 @@ def load_metrics(
                 # Stack: rows=seeds, cols=evaluations
                 stacked_data = np.vstack(data_list)
                 
-                median = np.median(stacked_data, axis=0)
-                lq = np.percentile(stacked_data, 25, axis=0)
-                uq = np.percentile(stacked_data, 75, axis=0)
+                median = np.nanmedian(stacked_data, axis=0)
+                lq = np.nanpercentile(stacked_data, 25, axis=0)
+                uq = np.nanpercentile(stacked_data, 75, axis=0)
                 
                 # Store results
                 df_stats = pd.DataFrame({

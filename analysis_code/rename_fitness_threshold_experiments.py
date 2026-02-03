@@ -4,21 +4,25 @@ from pathlib import Path
 
 # --- Configuration ---
 
-BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
-OLD_PARENT_NAME = "multi-hidden-layer-multi-svd"
-NEW_PARENT_NAME = "multi-hidden-layer-multi-svd-threshold-0"
-TARGET_STRING = "fitness_threshold=0.0"
+# BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
+# BASE_ROOT = Path("/workspace/src/output/sdxl-turbo")
+BASE_ROOT = Path("/workspace/src/new_hpc_flux/output/flux")
+
+EXP_NAME = "dns"
+OLD_PARENT_NAME = "flux-hidden-layer-latent-svd"
+NEW_PARENT_NAME = "flux-hidden-layer-latent-svd-threshold-0.2"
+TARGET_STRING = "fitness_threshold: 0.2"
 
 # Set to False to actually move files. Keep True to test safely first.
-DRY_RUN = True 
+DRY_RUN = False 
 
 def restructure_directories():
     print(f"--- Starting {'DRY RUN' if DRY_RUN else 'LIVE EXECUTION'} ---")
     
     # Iterate through PROMPT 1 to 36
     for prompt_key in range(1, 37):
-        # Construct the path: .../sdxl-turbo/{PROMPT}/dns/multi-hidden-layer-multi-svd/
-        current_parent_dir = BASE_ROOT / str(prompt_key) / "dns" / OLD_PARENT_NAME
+        # Construct the path: .../sdxl-turbo/{PROMPT}/{EXP_NAME}/multi-hidden-layer-multi-svd/
+        current_parent_dir = BASE_ROOT / str(prompt_key) / EXP_NAME / OLD_PARENT_NAME
         
         # Check if this directory actually exists
         if not current_parent_dir.exists():
@@ -31,11 +35,11 @@ def restructure_directories():
             if not experiment_dir.is_dir():
                 continue
 
-            yaml_path = experiment_dir / "overrides.yaml"
+            yaml_path = experiment_dir / "config.yaml"
             
-            # Check if overrides.yaml exists
+            # Check if config.yaml exists
             if not yaml_path.exists():
-                print(f"[Warning] No overrides.yaml found in {experiment_dir}")
+                print(f"[Warning] No config.yaml found in {experiment_dir}")
                 continue
 
             # Read the yaml file to check for fitness_threshold
@@ -44,7 +48,7 @@ def restructure_directories():
                 
                 if TARGET_STRING in content:
                     # Construct the new destination path
-                    # .../sdxl-turbo/{PROMPT}/dns/multi-hidden-layer-multi-svd-threshold-0/
+                    # .../sdxl-turbo/{PROMPT}/{EXP_NAME}/multi-hidden-layer-multi-svd-threshold-0/
                     new_parent_dir = current_parent_dir.parent / NEW_PARENT_NAME
                     destination_path = new_parent_dir / experiment_dir.name
 

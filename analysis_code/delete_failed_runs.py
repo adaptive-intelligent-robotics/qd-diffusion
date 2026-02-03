@@ -2,11 +2,13 @@ import shutil
 from pathlib import Path
 
 # --- Configuration ---
-BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
+# BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
+BASE_ROOT = Path("/workspace/src/output/sdxl-turbo")
+
 SUCCESS_MARKER = Path("repertoire/final_fitnesses.pt")
 
 # Set to False to actually delete files. Keep True to test safely first.
-DRY_RUN = True 
+DRY_RUN = False 
 
 def cleanup_failed_experiments():
     print(f"--- Starting Cleanup ({'DRY RUN' if DRY_RUN else 'LIVE DELETION'}) ---\n")

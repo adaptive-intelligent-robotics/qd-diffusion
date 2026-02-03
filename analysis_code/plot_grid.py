@@ -5,23 +5,55 @@ import pandas as pd
 from typing import List, Dict, Any
 
 # ---- Visual Hyperparameters ----
-FIG_WIDTH = 20
-FIG_HEIGHT = 6
+FIG_WIDTH = 30
+FIG_HEIGHT = 5
 FIGURE_DPI = 200
 
 # Font sizes
-TITLE_FONT_SIZE = 14
-LABEL_FONT_SIZE = 12
-LEGEND_FONT_SIZE = 12
+TITLE_FONT_SIZE = 20
 TITLE_FONT_WEIGHT = 'bold' 
+
+LABEL_FONT_SIZE = 12
+LEGEND_FONT_SIZE = 20
+LEGEND_FONT_WEIGHT = 'bold'
+LEGEND_TWO_LINES = False  # Set to True for two lines, False for one line
 
 # Spacing
 LEFTSPACING = 0.01 # the left side of the subplots of the figure
 RIGHTSPACING = 0.999 # the right side of the subplots of the figure
-BOTTOMSPACING = 0.13  # the bottom of the subplots of the figure
+BOTTOMSPACING = 0.22  # the bottom of the subplots of the figure
 TOPSPACING = 0.9 # the top of the subplots of the figure
 WIDTHSPACING = 0.1 # the proportion of width reserved for blank space between subplots
 HEIGHTSPACING = 0.3  # the proportion of height reserved for blank space between subplots
+
+NROWS = 1
+NCOLS = 5
+
+
+# FIG_WIDTH = 20
+# FIG_HEIGHT = 6
+# FIGURE_DPI = 200
+
+# # Font sizes
+# TITLE_FONT_SIZE = 20
+# TITLE_FONT_WEIGHT = 'bold' 
+# LABEL_FONT_SIZE = 12
+# LEGEND_FONT_SIZE = 20
+# LEGEND_FONT_WEIGHT = 'bold'
+
+# # Legend layout
+# LEGEND_TWO_LINES = True  # Set to True for two lines, False for one line
+
+# # Spacing
+# LEFTSPACING = 0.00 # the left side of the subplots of the figure
+# RIGHTSPACING = 1.0 # the right side of the subplots of the figure
+# BOTTOMSPACING = 0.15  # the bottom of the subplots of the figure
+# TOPSPACING = 0.9 # the top of the subplots of the figure
+# WIDTHSPACING = 0.1 # the proportion of width reserved for blank space between subplots
+# HEIGHTSPACING = 0.3  # the proportion of height reserved for blank space between subplots
+
+# NROWS = 2
+# NCOLS = 3
 
 def customize_axis(ax: Any) -> Any:
     """Removes spines and adds grid for cleaner look."""
@@ -53,14 +85,8 @@ def plot_grid(
     print("-------------------------------------------------------------------------")
 
     num_plots = len(metrics_list)
+    nrows, ncols = NROWS, NCOLS
     
-    # Determine grid layout
-    if num_plots <= 4:
-        nrows, ncols = 1, num_plots
-    else:
-        ncols = 3
-        nrows = (num_plots + ncols - 1) // ncols
-
     # Setup Colors using Matplotlib 'tab20'
     algo_keys = list(algorithm_dicts.keys())
     
@@ -140,7 +166,9 @@ def plot_grid(
         handles.append(line)
         labels.append(algo_config["label"])
 
-    fig.legend(handles, labels, loc='lower center', ncol=len(labels), fontsize=LEGEND_FONT_SIZE, frameon=False)
+    # Determine number of columns based on LEGEND_TWO_LINES setting
+    legend_ncol = (len(labels) + 1) // 2 if LEGEND_TWO_LINES else len(labels)
+    fig.legend(handles, labels, loc='lower center', ncol=legend_ncol, prop={'weight': LEGEND_FONT_WEIGHT, 'size': LEGEND_FONT_SIZE}, frameon=False)
 
     plt.subplots_adjust(
         left=LEFTSPACING, right=RIGHTSPACING, 

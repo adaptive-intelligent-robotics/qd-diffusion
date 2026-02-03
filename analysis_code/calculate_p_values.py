@@ -21,6 +21,8 @@ def load_final_metrics(root_dir, algo_dicts, metrics, seeds):
     print(f"Loading final metrics for statistical analysis...")
 
     for algo_key, algo_config in algo_dicts.items():
+        print(f"\nProcessing Algorithm: {algo_config['label']} ({algo_key})")
+        valid_count = 0
         for seed in seeds:
             initial_path = os.path.join(root_dir, str(seed), algo_config["path"])
             exp_path = get_experiment_subdir(initial_path)
@@ -35,12 +37,25 @@ def load_final_metrics(root_dir, algo_dicts, metrics, seeds):
                     if not df.empty:
                         last_row = df.iloc[-1]
                         for metric in metrics:
-                            if metric in last_row:
+                            if metric == 'num_solutions':
+                                # Calculate num_solutions as coverage * 64
+                                if 'coverage' in last_row:
+                                    val = last_row['coverage'] * 64
+                                    if not np.isnan(val):
+                                        final_data[metric][algo_key].append(val)
+                            elif metric in last_row:
                                 val = last_row[metric]
                                 if not np.isnan(val):
                                     final_data[metric][algo_key].append(val)
-                except:
+                        valid_count += 1
+                except Exception as e:
+                    print(f"     Warning: Failed to load seed {seed}: {e}")
                     pass
+        print(f"  -> Processed {valid_count} valid seeds.")
+        # Debug: print how many values were actually collected for each metric
+        for metric in metrics:
+            count = len(final_data[metric][algo_key])
+            print(f"     Metric '{metric}': {count} values")
     return final_data
 
 def holm_bonf_correction(p_values):
