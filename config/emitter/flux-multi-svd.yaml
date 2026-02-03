@@ -1,0 +1,16 @@
+name: "flux-multi-svd"
+type: "hidden_layer_multi"
+genotype: "multi"
+mutation_type: "svd" 
+model_type: "flux"
+
+latent_alpha_min: -10
+latent_alpha_max: 10
+prompt_embedding_alpha_min: -10
+prompt_embedding_alpha_max: 10
+pooled_prompt_embedding_alpha_min: -10
+pooled_prompt_embedding_alpha_max: 10
+
+# Only used for flux:
+hook_min: 0.2
+hook_max: 0.8

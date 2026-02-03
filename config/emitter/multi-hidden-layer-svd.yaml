@@ -8,13 +8,16 @@ svd_iters: 5
 svd_fd_eps: 1e-3
 svd_layer: "mid_block"
 
-latent_alpha_min: -20
-latent_alpha_max: 20
-prompt_embedding_alpha_min: -20
-prompt_embedding_alpha_max: 20
-pooled_prompt_embedding_alpha_min: -20
-pooled_prompt_embedding_alpha_max: 20
+latent_alpha_min: -10
+latent_alpha_max: 10
+prompt_embedding_alpha_min: -10
+prompt_embedding_alpha_max: 10
+pooled_prompt_embedding_alpha_min: -10
+pooled_prompt_embedding_alpha_max: 10
 
+# Only used for flux:
+hook_min: 0.2
+hook_max: 0.8
 
 # only used for sd-1-5
 hook_proportion: 0.6

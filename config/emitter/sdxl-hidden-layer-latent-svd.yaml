@@ -4,8 +4,8 @@ genotype: "latent"
 mutation_type: "svd"
 model_type: "sdxl-turbo"
 
-alpha_min: -20
-alpha_max: 20
+alpha_min: -10
+alpha_max: 10
 svd_k: 3
 svd_iters: 5
 svd_fd_eps: 1e-3
