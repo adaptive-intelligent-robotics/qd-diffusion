@@ -7,6 +7,7 @@ import hydra
 import logging
 import numpy as np
 import random
+import time
 import torch
 import wandb
 torch.cuda.empty_cache()
@@ -110,6 +111,7 @@ def main(config: DictConfig) -> None:
         "qd_score",
         "avg_fitness",
         "coverage",
+        "emitter_time",
         "max_fitness",
         "time",
         "evaluations",
@@ -834,18 +836,22 @@ def main(config: DictConfig) -> None:
     else:
         max_iters = config.max_iterations
         save_repertoire_period = config.save_repertoire_period
-           
+    
+    total_emitter_time = 0.0
     for itr in range(1, int(max_iters) + 1):
         
         if config.algorithm.name == "qdhf":
             if itr in qdhf_update_schedule:
                 logger.warning(f"--- Updating QDHF Diversity Model at iteration {itr} ---")
+                start_time = time.time()
                 diversity_model = update_qdhf_diversity_model(
                     archive, 
                     initial_solution,
                     scoring_fn,
                     config,
                 )
+                end_time = time.time()
+                total_emitter_time += (end_time - start_time)
                 new_archive = get_qdhf_archive(
                     archive.data()["solution"],
                     scoring_fn,
@@ -858,8 +864,11 @@ def main(config: DictConfig) -> None:
                     scheduler = DictScheduler(new_archive, [emitter])
                 else:
                     scheduler = DictScheduler(new_archive, emitters)  
-                          
+        
+        start_time = time.time()      
         solutions = scheduler.ask()
+        end_time = time.time()
+        total_emitter_time += (end_time - start_time)
         
         if config.algorithm.name != "qdhf":
             fitnesses, descriptors, images = scoring_fn(solutions)
@@ -891,7 +900,8 @@ def main(config: DictConfig) -> None:
             
         else:
             current_metrics = me_metrics_function(scheduler.archive, itr, config)
-            
+        
+        current_metrics["emitter_time"] = total_emitter_time
         wandb.log(current_metrics)
         csv_logger.log(current_metrics)
         logger.warning(f"--- ITERATION: {itr} ---")
