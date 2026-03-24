@@ -75,6 +75,11 @@ def load_metrics(
                 print(f"     Checked: {check_file_path}")
                 continue
             
+            # Check if there are multiple timestamped subdirectories
+            subdirs = [d for d in os.listdir(initial_path) if os.path.isdir(os.path.join(initial_path, d))]
+            if len(subdirs) > 1:
+                print(f"  !! WARNING: Seed {seed} has multiple experiment subdirectories ({len(subdirs)} found). Using: {os.path.basename(experiment_path)}")
+            
             if not os.path.exists(metrics_path):
                 print(f"  !! WARNING: Seed {seed} missing metrics file - Excluding.")
                 continue

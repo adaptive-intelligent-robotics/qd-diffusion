@@ -5,7 +5,11 @@ import pandas as pd
 from typing import List, Dict, Any
 
 # ---- Visual Hyperparameters ----
+<<<<<<< Updated upstream
 FIG_WIDTH = 30
+=======
+FIG_WIDTH = 20
+>>>>>>> Stashed changes
 FIG_HEIGHT = 5
 FIGURE_DPI = 200
 

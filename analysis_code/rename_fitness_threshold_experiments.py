@@ -15,6 +15,7 @@ TARGET_STRING = "fitness_threshold: 0.2"
 
 # Set to False to actually move files. Keep True to test safely first.
 DRY_RUN = False 
+DRY_RUN = False 
 
 def restructure_directories():
     print(f"--- Starting {'DRY RUN' if DRY_RUN else 'LIVE EXECUTION'} ---")
