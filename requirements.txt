@@ -44,8 +44,6 @@ tensorboardx
 tensorflow-probability
 termcolor
 timm
-torchmetrics
-torchvision
 transformers
 tqdm
 typing-extensions

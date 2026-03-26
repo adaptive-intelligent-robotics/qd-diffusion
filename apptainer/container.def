@@ -39,7 +39,7 @@ From: ubuntu:22.04
 	python3.10 -m venv /venv
 	. /venv/bin/activate
 	python -m ensurepip
-	pip install --upgrade pip
+	pip install --upgrade pip setuptools wheel
 
 	# Set up workspace
 	mkdir /workspace/ && cd /workspace/
@@ -49,8 +49,7 @@ From: ubuntu:22.04
 	git checkout {{ commit }}
 
 	# Pytorch must be installed before xformers
-	python -m pip install -U --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
-	pip install pytorch-fid
+	pip install torch torchvision torchaudio pytorch-fid torchmetrics xformers --index-url https://download.pytorch.org/whl/cu121
 	
 	# Install all other requirements
 	pip install -r requirements.txt
