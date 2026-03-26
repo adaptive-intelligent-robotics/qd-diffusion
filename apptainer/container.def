@@ -50,6 +50,7 @@ From: ubuntu:22.04
 
 	# Pytorch must be installed before xformers
 	python -m pip install -U --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+	pip install pytorch-fid
 	
 	# Install all other requirements
 	pip install -r requirements.txt

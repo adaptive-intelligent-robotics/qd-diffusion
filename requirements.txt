@@ -32,7 +32,6 @@ optimum-quanto
 pandas
 pillow
 protobuf
-pytorch-fid
 regex
 requests
 ribs
