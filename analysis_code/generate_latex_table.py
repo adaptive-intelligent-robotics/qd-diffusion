@@ -397,108 +397,12 @@ if __name__ == "__main__":
     """
     
     # Configuration
-    ROOT_DIR = "/workspace/src/hpc_results/output/sdxl-turbo/"
+    ROOT_DIR = "/workspace/src/hpc_results/ablation_results/"
     OUTPUT_DIR = "analysis_output"
-    SEEDS = range(1, 37)
-    TARGET_EVALUATIONS = 400  # Set to an int to use a specific evaluations row
+    SEEDS = [1, 4, 7, 10, 13, 16, 20, 22, 25, 28, 31, 34]
+    TARGET_EVALUATIONS = 2000
     
     # Define algorithms
-    
-    # genotype_ablation_dicts = {
-    #     "dns_svd": {
-    #         "root_dir": ROOT_DIR,
-    #         "path": "dns/multi-hidden-layer-multi-svd-alpha-10",
-    #         "label": "Spectral-Guided QD-Diffusion (Ours)",
-    #         "grid_plot_linestyle": "solid",
-    #     },  
-    #     "dns_svd_latent": {
-    #         "root_dir": ROOT_DIR,
-    #         "path": "dns/sdxl-hidden-layer-latent-svd",
-    #         "label": "Spectral-Guided QD-Diffusion (Latent SVD)",
-    #         "grid_plot_linestyle": "solid",
-    #     },  
-    #     "dns_svd_pooled": {
-    #         "root_dir": ROOT_DIR,
-    #         "path": "dns/sdxl-hidden-layer-pooled-svd",
-    #         "label": "Spectral-Guided QD-Diffusion (Pooled SVD)",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "dns_svd_prompt": {  
-    #         "root_dir": ROOT_DIR,
-    #         "path": "dns/sdxl-hidden-layer-prompt-embed-svd",
-    #         "label": "Spectral-Guided QD-Diffusion (Prompt Embed SVD)",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    # }
-    
-    # baseline_dicts = {
-    #     "dns_svd": {
-    #         "path": "dns/multi-hidden-layer-multi-svd-alpha-10",
-    #         "label": "Spectral-Guided QD-Diffusion (Ours)",
-    #         "grid_plot_linestyle": "solid",
-    #     },  
-    #     "cvt-map-elites": {
-    #         "path": "cvt-map-elites/multi-hidden-layer-multi-svd-alpha-10",
-    #         "label": "CVT MAP-Elites",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "ablation": {   
-    #         "path": "dns/multi-hidden-layer-multi-svd-threshold-0-alpha-10",
-    #         "label": "Fitness Threshold Ablation",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "cma-es": {
-    #         "path": "dns/multi-sep-cma-es",
-    #         "label": "Sep-CMA-ES",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #         "adam": {
-    #         "path": "dns/multi-adam",
-    #         "label": "Adam",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "qdhf": {
-    #         "path": "qdhf/multi-hidden-layer-multi-svd-alpha-10",
-    #         "label": "QDHF",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    # }
-    
-    # emitter_dicts = {
-    #     "dns_svd": {
-    #         "path": "dns/multi-hidden-layer-multi-svd-alpha-10",
-    #         "label": "Spectral-Guided QD-Diffusion (Ours)",
-    #         "grid_plot_linestyle": "solid",
-    #     }, 
-    #     "dns_random": {
-    #         "path": "dns/random-seeds", 
-    #         "label": "Random Seeds",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "dns_hidden_gaussian": {
-    #         "path": "dns/multi-hidden-layer-gaussian",
-    #         "label": "Intermed.-layer Gaussian",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "dns_mixed": {
-    #         "path": "dns/mixed-all",
-    #         "label": "ImageBreeder",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "dns_gaussian": {
-    #         "path": "dns/multi-gaussian",
-    #         "label": "Gaussian",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    #     "dns_isoline": {
-    #         "path": "dns/multi-isoline",
-    #         "label": "Isoline-DD",
-    #         "grid_plot_linestyle": "solid",
-    #     },
-    # }
-    
-    # Define metrics
-    metrics_list = ["total_fitnesses", "avg_pairwise_dist", "total_variance", "num_solutions"]
     
     metrics_labels = {
         "avg_fitness": "Avg. Fitness",
@@ -518,123 +422,39 @@ if __name__ == "__main__":
         "total_fitnesses": True,
         "total_variance": True,
     }
-    
-    # # Load data
-    # seed_values = load_all_seed_metrics(
-    #     root_dir=ROOT_DIR,
-    #     algorithm_dicts=baseline_dicts,
-    #     metrics_list=metrics_list,
-    #     seeds=SEEDS,
-    # )
-    
-    # # Calculate statistical significance
-    # # Compares all algorithms to the best performer for each metric (one-vs-many)
-    # p_values, best_algos = calculate_statistical_significance(
-    #     seed_values=seed_values,
-    #     metrics_list=metrics_list,
-    #     maximize_metrics=maximize_metrics
-    # )
-    
-    # # Generate LaTeX table
-    # output_path = os.path.join(OUTPUT_DIR, "latex_table_baselines.txt")
-    # generate_latex_table(
-    #     seed_values=seed_values,
-    #     algorithm_dicts=baseline_dicts,
-    #     metrics_list=metrics_list,
-    #     metrics_labels=metrics_labels,
-    #     p_values=p_values,
-    #     best_algos=best_algos,
-    #     output_path=output_path,
-    #     maximize_metrics=maximize_metrics,
-    #     significance_level=0.05,
-    #     show_std=True
-    # )
-    
-    #  # Load data
-    # seed_values = load_all_seed_metrics(
-    #     root_dir=ROOT_DIR,
-    #     algorithm_dicts=emitter_dicts,
-    #     metrics_list=metrics_list,
-    #     seeds=SEEDS,
-    # )
-    
-    # # Calculate statistical significance
-    # # Compares all algorithms to the best performer for each metric (one-vs-many)
-    # p_values, best_algos = calculate_statistical_significance(
-    #     seed_values=seed_values,
-    #     metrics_list=metrics_list,
-    #     maximize_metrics=maximize_metrics
-    # )
-    
-    # # Generate LaTeX table
-    # output_path = os.path.join(OUTPUT_DIR, "latex_table_emitters.txt")
-    # generate_latex_table(
-    #     seed_values=seed_values,
-    #     algorithm_dicts=emitter_dicts,
-    #     metrics_list=metrics_list,
-    #     metrics_labels=metrics_labels,
-    #     p_values=p_values,
-    #     best_algos=best_algos,
-    #     output_path=output_path,
-    #     maximize_metrics=maximize_metrics,
-    #     significance_level=0.05,
-    #     show_std=True
-    # )
-
-    # Load data
-    # seed_values = load_all_seed_metrics(
-    #     root_dir=ROOT_DIR,
-    #     algorithm_dicts=genotype_ablation_dicts,
-    #     metrics_list=metrics_list,
-    #     seeds=SEEDS,
-    #     target_evaluations=TARGET_EVALUATIONS,
-    # )
-    
-    # # Calculate statistical significance
-    # # Compares all algorithms to the best performer for each metric (one-vs-many)
-    # p_values, best_algos = calculate_statistical_significance(
-    #     seed_values=seed_values,
-    #     metrics_list=metrics_list,
-    #     maximize_metrics=maximize_metrics
-    # )
-    
-    # # Generate LaTeX table
-    # output_path = os.path.join(OUTPUT_DIR, "latex_table_genotype_ablation.txt")
-    # generate_latex_table(
-    #     seed_values=seed_values,
-    #     algorithm_dicts=genotype_ablation_dicts,
-    #     metrics_list=metrics_list,
-    #     metrics_labels=metrics_labels,
-    #     p_values=p_values,
-    #     best_algos=best_algos,
-    #     output_path=output_path,
-    #     maximize_metrics=maximize_metrics,
-    #     significance_level=0.05,
-    #     show_std=True
-    # )
-    
-    ROOT_DIR = "/workspace/src/new_hpc_flux/output/flux/"
-        
-    flux_dicts = {
+            
+    algo_dicts = {
+        "dns_svd_alpha-5": {
+            "root_dir": ROOT_DIR,
+            "path": "dns/multi-svd-hidden-layer-alpha-5",
+            "label": "Alpha: 5",
+            "grid_plot_linestyle": "solid",
+        },
         "dns_svd": {
             "root_dir": ROOT_DIR,
-            "path": "dns/flux-hidden-layer-latent-svd",
-            "label": "Spectral-Guided QD-Diffusion (Ours)",
+            "path": "dns/multi-svd-hidden-layer",
+            "label": "Alpha: 10",
             "grid_plot_linestyle": "solid",
         },  
-        "random-seeds": {
+        # "dns_svd_alpha-15": {
+        #     "root_dir": ROOT_DIR,
+        #     "path": "dns/multi-svd-hidden-layer-alpha-15",
+        #     "label": "Alpha: 15",
+        #     "grid_plot_linestyle": "solid",
+        # },
+        "dns_svd_alpha-20": {
             "root_dir": ROOT_DIR,
-            "path": "dns/random-seeds",
-            "label": "Random Seeds",
+            "path": "dns/multi-svd-hidden-layer-alpha-20",
+            "label": "Alpha: 20",
             "grid_plot_linestyle": "solid",
-        },  
+        },
     }
     metrics_list = ["total_fitnesses", "avg_pairwise_dist", "num_solutions"]
 
     
     seed_values = load_all_seed_metrics(
         root_dir=ROOT_DIR,
-        algorithm_dicts=flux_dicts,
+        algorithm_dicts=algo_dicts,
         metrics_list=metrics_list,
         seeds=SEEDS,
     )
@@ -648,10 +468,10 @@ if __name__ == "__main__":
     )
     
     # Generate LaTeX table
-    output_path = os.path.join(OUTPUT_DIR, "latex_table_flux.txt")
+    output_path = os.path.join(OUTPUT_DIR, "alpha_ablation.txt")
     generate_latex_table(
         seed_values=seed_values,
-        algorithm_dicts=flux_dicts,
+        algorithm_dicts=algo_dicts,
         metrics_list=metrics_list,
         metrics_labels=metrics_labels,
         p_values=p_values,

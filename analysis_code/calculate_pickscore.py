@@ -8,6 +8,47 @@ from transformers import AutoProcessor, AutoModel
 from scipy.spatial.distance import cdist
 from typing import List, Dict, Tuple
 
+# --- SIMPLE SCRIPT CONFIG ---
+# Set these values and run this file directly if you want the
+# PATH/SEED/ALGO/EXP_DATE/repertoire/final_images.pt analysis.
+ROOT_PATH = "/workspace/src/hpc_results/output/sdxl-turbo/"  
+ALGORITHM_DICTS: Dict = {
+    "dns_svd": {
+        "path": "dns/multi-hidden-layer-multi-svd-alpha-10",
+        "label": "Spectral-Guided QD-Diffusion (Ours)",
+        "grid_plot_linestyle": "solid",
+    },  
+    "cvt-map-elites": {
+        "path": "cvt-map-elites/multi-hidden-layer-multi-svd-alpha-10",
+        "label": "CVT MAP-Elites",
+        "grid_plot_linestyle": "solid",
+    },
+    "ablation": {   
+        "path": "dns/multi-hidden-layer-multi-svd-threshold-0-alpha-10",
+        "label": "Fitness Threshold Ablation",
+        "grid_plot_linestyle": "solid",
+    },
+    "cma-es": {
+        "path": "dns/multi-sep-cma-es",
+        "label": "Sep-CMA-ES",
+        "grid_plot_linestyle": "solid",
+    },
+        "adam": {
+        "path": "dns/multi-adam",
+        "label": "Adam",
+        "grid_plot_linestyle": "solid",
+    },
+    "qdhf": {
+        "path": "qdhf/multi-hidden-layer-multi-svd-alpha-10",
+        "label": "QDHF",
+        "grid_plot_linestyle": "solid",
+    },
+}
+
+# Optional explicit seed list, e.g. [1, 2, 3].
+# Keep as None to auto-discover numeric seed folders in ROOT_PATH.
+SEEDS_OVERRIDE = None
+
 # --- SINGLETON MODEL LOADER ---
 _pickscore_model = None
 _pickscore_processor = None
@@ -230,3 +271,132 @@ def analyze_pickscores(
             print(f"  -> Mean Score: {val:.2f}")
 
     return pd.DataFrame(results)
+
+
+def _discover_numeric_seeds(root_dir: str) -> List[int]:
+    if not os.path.exists(root_dir):
+        return []
+    seeds = []
+    for name in os.listdir(root_dir):
+        full_path = os.path.join(root_dir, name)
+        if os.path.isdir(full_path) and name.isdigit():
+            seeds.append(int(name))
+    return sorted(seeds)
+
+
+def analyze_final_images_by_algo(
+    root_dir: str,
+    algorithm_dicts: Dict,
+    prompts_by_seed: Dict[int, str],
+    seeds: List[int] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Calculates PickScore means from final_images.pt for each seed and algorithm,
+    then averages across seeds.
+
+    Expected structure:
+      root_dir/SEED/ALGO/EXP_DATE/repertoire/final_images.pt
+    """
+    if seeds is None:
+        seeds = _discover_numeric_seeds(root_dir)
+
+    per_seed_rows = []
+    summary_rows = []
+
+    print("\n------------------------------------------------------------")
+    print(" PickScore from final images (per seed and mean over seeds)")
+    print("------------------------------------------------------------")
+
+    for algo_key, algo_config in algorithm_dicts.items():
+        algo_path = algo_config.get("path")
+        algo_label = algo_config.get("label", algo_key)
+        if not algo_path:
+            print(f"Processing algorithm: {algo_label}")
+            print("  -> Missing 'path' in config. Skipping.")
+            continue
+
+        algo_seed_means = []
+        print(f"Processing algorithm: {algo_label}")
+
+        for seed in seeds:
+            if seed not in prompts_by_seed:
+                continue
+
+            prompt = prompts_by_seed[seed]
+            base_path = os.path.join(root_dir, str(seed), algo_path)
+            exp_path = get_experiment_subdir(base_path)
+            if exp_path is None:
+                continue
+
+            img_path = os.path.join(exp_path, "repertoire", "final_images.pt")
+            if not os.path.exists(img_path):
+                continue
+
+            try:
+                images = torch.load(img_path, map_location="cpu", weights_only=False)
+                if isinstance(images, np.ndarray):
+                    images = torch.from_numpy(images)
+                if len(images) == 0:
+                    continue
+
+                pick_scores = get_pick_scores_batch(prompt, images)
+                seed_mean = float(np.mean(pick_scores))
+                algo_seed_means.append(seed_mean)
+
+                per_seed_rows.append(
+                    {
+                        "Algorithm": algo_label,
+                        "Algorithm Key": algo_key,
+                        "Algorithm Path": algo_path,
+                        "Seed": seed,
+                        "Num Images": int(len(images)),
+                        "PickScore Mean": seed_mean,
+                    }
+                )
+            except Exception as e:
+                print(f"  Error processing seed {seed} for {algo_label}: {e}")
+
+        if algo_seed_means:
+            summary_rows.append(
+                {
+                    "Algorithm": algo_label,
+                    "Algorithm Key": algo_key,
+                    "Algorithm Path": algo_path,
+                    "Mean PickScore Across Seeds": float(np.mean(algo_seed_means)),
+                    "Std Error": float(np.std(algo_seed_means) / np.sqrt(len(algo_seed_means))),
+                    "Seeds Used": int(len(algo_seed_means)),
+                }
+            )
+            print(f"  -> Mean across seeds: {np.mean(algo_seed_means):.4f}")
+        else:
+            print("  -> No valid seed runs found.")
+
+    return pd.DataFrame(per_seed_rows), pd.DataFrame(summary_rows)
+
+
+if __name__ == "__main__":
+    if not ROOT_PATH:
+        raise ValueError("Set ROOT_PATH at the top of this file before running.")
+    if not ALGORITHM_DICTS:
+        raise ValueError("Set ALGORITHM_DICTS (dict with 'path' and 'label') at the top of this file before running.")
+
+    from prompts import prompts_dict
+
+    seeds_to_use = SEEDS_OVERRIDE if SEEDS_OVERRIDE is not None else None
+
+    per_seed_df, summary_df = analyze_final_images_by_algo(
+        root_dir=ROOT_PATH,
+        algorithm_dicts=ALGORITHM_DICTS,
+        prompts_by_seed=prompts_dict,
+        seeds=seeds_to_use,
+    )
+
+    print("\nPer-seed results:")
+    print(per_seed_df)
+    print("\nPer-algorithm summary:")
+    print(summary_df)
+
+    if not per_seed_df.empty:
+        per_seed_df.to_csv("pickscore_per_seed.csv", index=False)
+    if not summary_df.empty:
+        summary_df.to_csv("pickscore_summary.csv", index=False)

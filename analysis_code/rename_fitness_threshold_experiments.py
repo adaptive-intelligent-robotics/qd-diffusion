@@ -4,17 +4,14 @@ from pathlib import Path
 
 # --- Configuration ---
 
-# BASE_ROOT = Path("/workspace/src/hpc_results/output/sdxl-turbo")
-# BASE_ROOT = Path("/workspace/src/output/sdxl-turbo")
-BASE_ROOT = Path("/workspace/src/new_hpc_flux/output/flux")
+BASE_ROOT = Path("/workspace/src/hpc_results/ablation_results")
 
 EXP_NAME = "dns"
-OLD_PARENT_NAME = "flux-hidden-layer-latent-svd"
-NEW_PARENT_NAME = "flux-hidden-layer-latent-svd-threshold-0.2"
-TARGET_STRING = "fitness_threshold: 0.2"
+OLD_PARENT_NAME = "multi-svd-hidden-layer"
+NEW_PARENT_NAME = "multi-svd-hidden-layer-alpha-15"
+TARGET_STRING = "latent_alpha_min: -15"
 
 # Set to False to actually move files. Keep True to test safely first.
-DRY_RUN = False 
 DRY_RUN = False 
 
 def restructure_directories():
