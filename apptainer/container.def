@@ -48,11 +48,21 @@ From: ubuntu:22.04
 	git clone https://{{ gitlab_user }}:{{ gitlab_token }}@gitlab.doc.ic.ac.uk/AIRL/research_projects/hannah_janmohamed/latent_exploration.git src/ && cd src/
 	git checkout {{ commit }}
 
-	# Pytorch must be installed before xformers
-	pip install torch torchvision torchaudio pytorch-fid torchmetrics xformers --index-url https://download.pytorch.org/whl/cu121
-	
-	# Install all other requirements
+# 1. Install all the general requirements FIRST
+	# This will install the "wrong" torch, but we will fix it in the next step
 	pip install -r requirements.txt
+	
+	# 2. OVERWRITE everything with the correct CUDA-versioned binaries
+	# We use --force-reinstall to make sure the +cu121 versions stick
+	pip install --force-reinstall \
+		torch==2.5.1+cu121 \
+		torchvision==0.20.1+cu121 \
+		torchaudio==2.5.1+cu121 \
+		xformers==0.0.28.post3 \
+		--extra-index-url https://download.pytorch.org/whl/cu121
+
+	# 3. Install remaining extras
+	pip install pytorch-fid torchmetrics
 	pip install --upgrade diffusers[flax]
 
 %runscript
