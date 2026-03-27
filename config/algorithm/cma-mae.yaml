@@ -1,0 +1,6 @@
+name: "cma-mae"
+min_descriptor: -0.25
+max_descriptor: 0.25
+with_grad: False
+archive_learning_rate: 0.01
+archive_fitness_threshold: 0.0

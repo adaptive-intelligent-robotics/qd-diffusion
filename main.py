@@ -19,6 +19,7 @@ torch.backends.cuda.matmul.allow_tf32 = False
 # Enforce deterministic algorithms where supported; warn instead of raising if an op is not
 torch.use_deterministic_algorithms(True, warn_only=True)
 from emitters.adam_emitter import AdamDictEmitter, prepare_adam_loss_fn
+from emitters.custom_es_emitter import DictEvolutionStrategyEmitter
 from emitters.custom_sep_cma_es import CMAESDictEmitter
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
@@ -178,16 +179,29 @@ def main(config: DictConfig) -> None:
     logger.warning("--- Setting up Archive ---")
     
     # Set up MAP-Elites
-    if config.algorithm.name == "cvt-map-elites":
+    if config.algorithm.name == "cvt-map-elites" or config.algorithm.name == "cma-mae":
         ranges = [[config.algorithm.min_descriptor, config.algorithm.max_descriptor] for _ in range(descriptor_dim)]
         archive = CVTDictArchive(
             solution_dim=solution_schema, # ignore batch dimension
             cells=config.max_pop_size,
             ranges=ranges,
             samples=100*config.max_pop_size,
+            learning_rate=config.algorithm.archive_learning_rate,
+            threshold_min=config.algorithm.archive_fitness_threshold,
             seed=config.seed,
             dtype=np.float32,
         )
+        
+        if config.algorithm.name == "cma-mae":
+            # No learning_rate/threshold_min here
+            results_archive = CVTDictArchive(
+                solution_dim=solution_schema, # ignore batch dimension
+                cells=config.max_pop_size,
+                ranges=ranges,
+                samples=100*config.max_pop_size,
+                seed=config.seed,
+                dtype=np.float32,
+            )
     
     elif config.algorithm.name == "dns":
         archive = DNSDictArchive(
@@ -237,6 +251,55 @@ def main(config: DictConfig) -> None:
             seed=config.seed,
             genotype_key=config.emitter.genotype
         )
+    
+    elif config.emitter.type == "multi-cma-mae":
+        
+        emitters_1 = [
+            DictEvolutionStrategyEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="latent",
+                sigma0=config.emitter.sigma0,
+                ranker=config.emitter.ranker,
+                selection_rule=config.emitter.selection_rule,
+                restart_rule=config.emitter.restart_rule,
+                batch_size=batch_sizes[0],
+                seed=config.seed,
+            )
+            for _ in range(1)
+        ]
+    
+        emitters_2 = [
+            DictEvolutionStrategyEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="prompt_embedding",
+                sigma0=config.emitter.sigma0,
+                ranker=config.emitter.ranker,
+                selection_rule=config.emitter.selection_rule,
+                restart_rule=config.emitter.restart_rule,
+                batch_size=batch_sizes[1],
+                seed=config.seed,
+            )
+            for _ in range(1)
+        ]
+        
+        emitters_3 = [
+            DictEvolutionStrategyEmitter(
+                archive=archive,
+                initial_solution=initial_solution,
+                mutation_key="pooled_prompt_embedding",
+                sigma0=config.emitter.sigma0,
+                ranker=config.emitter.ranker,
+                selection_rule=config.emitter.selection_rule,
+                restart_rule=config.emitter.restart_rule,
+                batch_size=batch_sizes[2],
+                seed=config.seed,
+            )
+            for _ in range(1)
+        ]
+        
+        emitters = emitters_1 + emitters_2 + emitters_3
     
     elif config.emitter.type == "diverse-diffusion":
         
@@ -833,7 +896,10 @@ def main(config: DictConfig) -> None:
     if config.emitter.genotype != "multi":
         scheduler = DictScheduler(archive, [emitter])
     else:
-        scheduler = DictScheduler(archive, emitters)
+        if config.algorithm.name == "cma-mae":
+            scheduler = DictScheduler(archive, emitters, result_archive=results_archive)
+        else:
+            scheduler = DictScheduler(archive, emitters)
 
 
     logger.warning("--- Algorithm initialisation ---")
@@ -908,7 +974,8 @@ def main(config: DictConfig) -> None:
                     descriptors
             )
             current_metrics = me_metrics_function(passive_dns_archive, itr, config)
-            
+        elif config.algorithm.name == "cma-mae":
+            current_metrics = me_metrics_function(scheduler.result_archive, itr, config)
         else:
             current_metrics = me_metrics_function(scheduler.archive, itr, config)
         
@@ -933,6 +1000,16 @@ def main(config: DictConfig) -> None:
                     generate_images_from_latents_fn,
                     _images_dir
                     )
+            
+            elif config.algorithm.name == "cma-mae":
+                save_repertoire(scheduler.result_archive, itr, _repertoire_dir, config)
+                plot_repertoire_images(
+                    scheduler.result_archive,
+                    itr,
+                    config,
+                    generate_images_from_latents_fn,
+                    _images_dir
+                    )
             else:
                 save_repertoire(scheduler.archive, itr, _repertoire_dir, config)
                 plot_repertoire_images(
@@ -947,6 +1024,15 @@ def main(config: DictConfig) -> None:
         save_repertoire(passive_dns_archive, "final", _repertoire_dir, config)
         plot_repertoire_images(
             passive_dns_archive,
+            "final",
+            config,
+            generate_images_from_latents_fn,
+            _images_dir
+            )
+    elif config.algorithm.name == "cma-mae":
+        save_repertoire(scheduler.result_archive, "final", _repertoire_dir, config)
+        plot_repertoire_images(
+            scheduler.result_archive,
             "final",
             config,
             generate_images_from_latents_fn,

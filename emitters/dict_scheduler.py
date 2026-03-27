@@ -98,6 +98,9 @@ class DictScheduler(Scheduler):
         if self.archive is not None:
             # Pass cleaned fields (without 'image') as kwargs
             add_info = self.archive.add(full_solution, objective, measures, **fields_to_keep)
+            
+        if self.result_archive is not None:
+            self.result_archive.add(full_solution, objective, measures, **fields_to_keep)
 
         # 4. Distribute to Emitters
         # (Emitters usually don't need the image, just the fitness/latents)

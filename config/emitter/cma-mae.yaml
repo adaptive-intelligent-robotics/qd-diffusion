@@ -1,0 +1,7 @@
+name: "cma-mae"
+type: "multi-cma-mae"
+genotype: "multi"
+sigma0: 0.5
+ranker: "imp"
+selection_rule: "mu"
+restart_rule: "basic"

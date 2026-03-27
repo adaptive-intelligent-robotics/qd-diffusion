@@ -350,12 +350,14 @@ class CVTDictArchive(ArchiveBase):
 
     @staticmethod
     def _compute_thresholds(indices, objective, cur_threshold, learning_rate, dtype):
-        """Same as original."""
         if len(indices) == 0:
             return np.array([], dtype=dtype)
         objective_sizes = aggregate(indices, 1, func="len", fill_value=0)[indices]
         objective_sums = aggregate(indices, objective, func="sum", fill_value=np.nan)[indices]
-        ratio = dtype(1.0 - learning_rate) ** objective_sizes
+        
+        # Safely cast the float using np.asarray
+        ratio = np.asarray(1.0 - learning_rate, dtype=dtype) ** objective_sizes
+        
         new_threshold = ratio * cur_threshold + (objective_sums / objective_sizes) * (1 - ratio)
         return new_threshold
 
