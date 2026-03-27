@@ -1,0 +1,5 @@
+name: "diverse-diffusion"
+type: "diverse-diffusion"
+genotype: "latent"
+sigma: 0.1
+diversity_strength: 0.5

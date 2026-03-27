@@ -22,6 +22,7 @@ from emitters.adam_emitter import AdamDictEmitter, prepare_adam_loss_fn
 from emitters.custom_sep_cma_es import CMAESDictEmitter
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
+from emitters.diverse_diffusion_emitter import DiverseDiffusionMaxEmitter
 from emitters.flux_hidden_layer_emitter import FluxHiddenLayerEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.imagebreeder import ImageBreederEmitter
@@ -236,6 +237,16 @@ def main(config: DictConfig) -> None:
             seed=config.seed,
             genotype_key=config.emitter.genotype
         )
+    
+    elif config.emitter.type == "diverse-diffusion":
+        
+        emitter = DiverseDiffusionMaxEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            batch_size=config.batch_size,
+            seed=config.seed,
+        )
+        
     elif config.emitter.type == "multi-gaussian":
         
         emitter_1 = GaussianDictEmitter(
