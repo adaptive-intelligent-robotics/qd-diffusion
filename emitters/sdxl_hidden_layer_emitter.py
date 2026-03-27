@@ -47,8 +47,13 @@ def compute_latents_svd(
         latents_in = scheduler.scale_model_input(current_latents, t)
         added_cond = {"text_embeds": pooled_embeds, "time_ids": time_ids}
         features = []
-        def hook(module, inp, out): features.append(out)
-        
+        def hook(module, inp, out):
+            # If the output is a tuple, take the first element (the tensor)
+            if isinstance(out, tuple):
+                features.append(out[0])
+            else:
+                features.append(out)
+                        
         # Register on dynamic target
         handle = target_module.register_forward_hook(hook)
         try:
@@ -119,7 +124,13 @@ def compute_embedding_svd(
         added_cond = {"text_embeds": pooled, "time_ids": time_ids}
         
         features = []
-        def hook(module, inp, out): features.append(out)
+        def hook(module, inp, out):
+            # Handle tuple outputs for different UNet layers
+            if isinstance(out, tuple):
+                features.append(out[0])
+            else:
+                features.append(out)
+                
         handle = target_module.register_forward_hook(hook)
         try:
             unet(latents_in, t, encoder_hidden_states=p_embeds, added_cond_kwargs=added_cond)
