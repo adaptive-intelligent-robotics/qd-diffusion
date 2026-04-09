@@ -124,6 +124,15 @@ class SeparableCMAESDict(EvolutionStrategyBase):
         lower_bounds=-np.inf,
         upper_bounds=np.inf,
     ):
+        # Torch bfloat16 cannot be converted directly to NumPy; upcast first.
+        def _to_numpy_safe(value):
+            if hasattr(value, "detach"):
+                tensor = value.detach().cpu()
+                if "bfloat16" in str(getattr(tensor, "dtype", "")):
+                    tensor = tensor.float()
+                return tensor.numpy()
+            return np.asarray(value)
+
         # 1. Setup Dictionary Handling
         if mutation_key not in initial_solution:
             raise ValueError(f"mutation_key '{mutation_key}' not in initial_solution")
@@ -133,11 +142,12 @@ class SeparableCMAESDict(EvolutionStrategyBase):
         # Parse initial solution to numpy
         self._seed_sol = {}
         for k, v in initial_solution.items():
-            # Handle torch tensors if passed
-            val = v.detach().cpu().numpy() if hasattr(v, "detach") else np.array(v)
+            val = _to_numpy_safe(v)
             if val.ndim > 0 and val.shape[0] == 1:
                 val = val.squeeze(0)
             self._seed_sol[k] = val
+
+        self._to_numpy_safe = _to_numpy_safe
             
         # Calculate dimensions for the optimizer
         target_arr = self._seed_sol[self.mutation_key]
@@ -179,7 +189,7 @@ class SeparableCMAESDict(EvolutionStrategyBase):
         if isinstance(x0, dict):
              # Update seed cache if needed
              # (Optional: you might want to update self._seed_sol here)
-             flat_x0 = x0[self.mutation_key].flatten()
+               flat_x0 = self._to_numpy_safe(x0[self.mutation_key]).flatten()
         else:
              flat_x0 = x0
              
