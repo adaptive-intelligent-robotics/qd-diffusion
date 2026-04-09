@@ -1,0 +1,24 @@
+name: "flux-hidden-layer-multi-gaussian"
+type: "hidden_layer_multi"
+genotype: "multi"
+mutation_type: "gaussian"
+model_type: "flux"
+
+
+latent_sigma: 0.1
+prompt_embedding_sigma: 0.1
+pooled_prompt_embedding_sigma: 0.1
+svd_k: 3
+svd_iters: 5
+svd_fd_eps: 1e-1
+svd_layer: "transformer_blocks.5"
+hook_min: 0.2
+hook_max: 0.8
+
+# not used
+latent_alpha_min: -10
+latent_alpha_max: 10
+prompt_embedding_alpha_min: -10
+prompt_embedding_alpha_max: 10
+pooled_prompt_embedding_alpha_min: -10
+pooled_prompt_embedding_alpha_max: 10
