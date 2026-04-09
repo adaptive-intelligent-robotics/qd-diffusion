@@ -65,6 +65,27 @@ class ImageBreederEmitter(EmitterBase):
     # PAPER OPERATORS (Adapted for NumPy Batches)
     # =========================================================================
 
+    def _cut_on_axis(self, latent1, latent2, axis, crossover_point=0.5):
+        """Cut two same-shaped tensors on a chosen axis and randomly pick one offspring."""
+        axis_len = latent1.shape[axis]
+
+        # If the selected axis cannot be split, fall back to blend crossover.
+        if axis_len < 2:
+            return self._basic_latent_blend_crossover(latent1, latent2, crossover_point)
+
+        cut_point = int(crossover_point * axis_len)
+        cut_point = max(1, min(cut_point, axis_len - 1))
+
+        left_slice = [slice(None)] * latent1.ndim
+        right_slice = [slice(None)] * latent1.ndim
+        left_slice[axis] = slice(0, cut_point)
+        right_slice[axis] = slice(cut_point, None)
+
+        offspring1 = np.concatenate((latent1[tuple(left_slice)], latent2[tuple(right_slice)]), axis=axis)
+        offspring2 = np.concatenate((latent2[tuple(left_slice)], latent1[tuple(right_slice)]), axis=axis)
+
+        return offspring1 if self._rng.random() < 0.5 else offspring2
+
     def _basic_latent_blend_crossover(self, latent1, latent2, blend_alpha=0.5):
         """
         Corresponds to: basic_latent_blend_crossover
@@ -94,54 +115,25 @@ class ImageBreederEmitter(EmitterBase):
         Cuts latent on channel dim (axis 1 in NCHW, but here inputs are CHW or NCHW).
         Assuming input is (C, H, W).
         """
-        if crossover_point >= 0.75:
-            channel_cut = 3
-        elif crossover_point <= 0.25:
-            channel_cut = 1
-        else:
-            channel_cut = 2
-
-        # Create offspring candidates
-        # latent1[:cut] + latent2[cut:]
-        offspring1 = np.concatenate((latent1[:channel_cut], latent2[channel_cut:]), axis=0)
-        # latent2[:cut] + latent1[cut:]
-        offspring2 = np.concatenate((latent2[:channel_cut], latent1[channel_cut:]), axis=0)
-
-        # "Randomly selects one of the two resulting outcomes"
-        return offspring1 if self._rng.random() < 0.5 else offspring2
+        return self._cut_on_axis(latent1, latent2, axis=0, crossover_point=crossover_point)
 
     def _horizontal_cut_crossover(self, latent1, latent2, crossover_point=0.5):
         """
         Corresponds to: horizontal_cut_crossover
         Cuts on Height (axis 1 in CHW).
         """
-        # cut_point = int(crossover_point * 64)
-        height = latent1.shape[1]
-        cut_point = int(crossover_point * height)
-        
-        # Clamp for safety
-        cut_point = max(1, min(cut_point, height - 1))
-
-        offspring1 = np.concatenate((latent1[:, :cut_point, :], latent2[:, cut_point:, :]), axis=1)
-        offspring2 = np.concatenate((latent2[:, :cut_point, :], latent1[:, cut_point:, :]), axis=1)
-
-        return offspring1 if self._rng.random() < 0.5 else offspring2
+        # For CHW this is axis=1; for lower-rank shapes this maps to the penultimate axis.
+        axis = 1 if latent1.ndim >= 3 else max(0, latent1.ndim - 2)
+        return self._cut_on_axis(latent1, latent2, axis=axis, crossover_point=crossover_point)
 
     def _vertical_cut_crossover(self, latent1, latent2, crossover_point=0.5):
         """
         Corresponds to: vertical_cut_crossover
         Cuts on Width (axis 2 in CHW).
         """
-        width = latent1.shape[2]
-        cut_point = int(crossover_point * width)
-        
-        # Clamp for safety
-        cut_point = max(1, min(cut_point, width - 1))
-
-        offspring1 = np.concatenate((latent1[:, :, :cut_point], latent2[:, :, cut_point:]), axis=2)
-        offspring2 = np.concatenate((latent2[:, :, :cut_point], latent1[:, :, cut_point:]), axis=2)
-
-        return offspring1 if self._rng.random() < 0.5 else offspring2
+        # For CHW this is axis=2; for lower-rank shapes this maps to the last axis.
+        axis = 2 if latent1.ndim >= 3 else latent1.ndim - 1
+        return self._cut_on_axis(latent1, latent2, axis=axis, crossover_point=crossover_point)
 
     def _random_cut_crossover(self, latent1, latent2, crossover_point=0.5):
         """
