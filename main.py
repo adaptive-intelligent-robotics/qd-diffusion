@@ -179,7 +179,18 @@ def main(config: DictConfig) -> None:
     logger.warning("--- Setting up Archive ---")
     
     # Set up MAP-Elites
-    if config.algorithm.name == "cvt-map-elites" or config.algorithm.name == "cma-mae":
+    if config.algorithm.name == "cvt-map-elites":
+        ranges = [[config.algorithm.min_descriptor, config.algorithm.max_descriptor] for _ in range(descriptor_dim)]
+        archive = CVTDictArchive(
+            solution_dim=solution_schema, # ignore batch dimension
+            cells=config.max_pop_size,
+            ranges=ranges,
+            samples=100*config.max_pop_size,
+            seed=config.seed,
+            dtype=np.float32,
+        )
+
+    elif config.algorithm.name == "cma-mae":
         ranges = [[config.algorithm.min_descriptor, config.algorithm.max_descriptor] for _ in range(descriptor_dim)]
         archive = CVTDictArchive(
             solution_dim=solution_schema, # ignore batch dimension
@@ -191,17 +202,15 @@ def main(config: DictConfig) -> None:
             seed=config.seed,
             dtype=np.float32,
         )
-        
-        if config.algorithm.name == "cma-mae":
-            # No learning_rate/threshold_min here
-            results_archive = CVTDictArchive(
-                solution_dim=solution_schema, # ignore batch dimension
-                cells=config.max_pop_size,
-                ranges=ranges,
-                samples=100*config.max_pop_size,
-                seed=config.seed,
-                dtype=np.float32,
-            )
+
+        results_archive = CVTDictArchive(
+            solution_dim=solution_schema, # ignore batch dimension
+            cells=config.max_pop_size,
+            ranges=ranges,
+            samples=100*config.max_pop_size,
+            seed=config.seed,
+            dtype=np.float32,
+        )
     
     elif config.algorithm.name == "dns":
         archive = DNSDictArchive(
