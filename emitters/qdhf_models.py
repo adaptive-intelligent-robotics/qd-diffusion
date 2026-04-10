@@ -1,8 +1,11 @@
 import time
+import logging
 import numpy as np
 import torch
 from torch import nn
 from repertoires.custom_grid import GridDictArchive
+
+logger = logging.getLogger(__name__)
 
 # Define device inside the function or pass it
 def get_div_proj_model(input_dim, latent_dim=2, device="cuda"):
@@ -210,11 +213,26 @@ def update_qdhf_diversity_model(archive, init_solution, scoring_function, config
         # We need to generate a "warmup" population by adding noise to the initial solution.
         
         total_warmup = config.algorithm.warmup_pop_size
-        minibatch_size = config.algorithm.minibatch_size
+        minibatch_size = min(config.algorithm.minibatch_size, config.batch_size)
+        total_minibatches = int(np.ceil(total_warmup / minibatch_size))
+        logger.warning(
+            "QDHF warmup: generating %s samples in %s minibatches of size <= %s",
+            total_warmup,
+            total_minibatches,
+            minibatch_size,
+        )
         
         # Loop in mini-batches to generate noisy samples without OOM
         for i in range(0, total_warmup, minibatch_size):
             current_batch_size = min(minibatch_size, total_warmup - i)
+            batch_idx = i // minibatch_size + 1
+            if batch_idx == 1 or batch_idx == total_minibatches or batch_idx % 5 == 0:
+                logger.warning(
+                    "QDHF warmup minibatch %s/%s (size=%s)",
+                    batch_idx,
+                    total_minibatches,
+                    current_batch_size,
+                )
             
             # Create a batch dictionary from the single init_solution
             batch_sols = {}
@@ -249,12 +267,27 @@ def update_qdhf_diversity_model(archive, init_solution, scoring_function, config
         indices = np.arange(total_sols)
         
         # Process in mini-batches
-        n_batches = np.ceil(total_sols / config.algorithm.minibatch_size).astype(int)
+        minibatch_size = min(config.algorithm.minibatch_size, config.batch_size)
+        n_batches = np.ceil(total_sols / minibatch_size).astype(int)
+        logger.warning(
+            "QDHF update: rescoring %s archive solutions in %s minibatches of size <= %s",
+            total_sols,
+            n_batches,
+            minibatch_size,
+        )
         
         for i in range(n_batches):
-            start_idx = i * config.algorithm.minibatch_size
-            end_idx = min((i + 1) * config.algorithm.minibatch_size, total_sols)
+            start_idx = i * minibatch_size
+            end_idx = min((i + 1) * minibatch_size, total_sols)
             batch_indices = indices[start_idx:end_idx]
+            batch_idx = i + 1
+            if batch_idx == 1 or batch_idx == n_batches or batch_idx % 5 == 0:
+                logger.warning(
+                    "QDHF update minibatch %s/%s (size=%s)",
+                    batch_idx,
+                    n_batches,
+                    len(batch_indices),
+                )
             
             # Construct batch dict for scoring
             batch_sols = {}
@@ -297,6 +330,12 @@ def update_qdhf_diversity_model(archive, init_solution, scoring_function, config
     # Gather data using advanced indexing
     div_proj_data = all_clip_features[triplet_indices]       # Shape: (n_pref_data, 3, Feat_Dim)
     div_proj_labels = all_dreamsim_features[triplet_indices] # Shape: (n_pref_data, 3, Feat_Dim)
+
+    logger.warning(
+        "QDHF fitting diversity model on %s triplets from %s feature samples",
+        config.algorithm.n_pref_data,
+        n_samples,
+    )
 
     # Fit model
     diversity_model, _div_proj_acc = fit_div_proj(

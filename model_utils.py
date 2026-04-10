@@ -325,6 +325,7 @@ def generate_images_from_latents_sdxl_turbo(
     unet,
     vae,
     with_grad=False,
+    decode_chunk_size=4,
     device="cuda"
 ):
     dtype = unet.dtype  # Match U-Net precision (fp16 or fp32)
@@ -386,7 +387,17 @@ def generate_images_from_latents_sdxl_turbo(
         images = vae.decode(latents / scaling_factor).sample
     else:
         with torch.no_grad():
-            images = vae.decode(latents / scaling_factor).sample
+            # Decode in chunks to avoid large transient VAE allocations.
+            latents_scaled = latents / scaling_factor
+            if latents_scaled.shape[0] <= decode_chunk_size:
+                images = vae.decode(latents_scaled).sample
+            else:
+                decoded_chunks = []
+                for i in range(0, latents_scaled.shape[0], decode_chunk_size):
+                    decoded_chunks.append(
+                        vae.decode(latents_scaled[i : i + decode_chunk_size]).sample
+                    )
+                images = torch.cat(decoded_chunks, dim=0)
 
     return images
 
@@ -415,7 +426,7 @@ def generate_images_from_latents_flux(
     guidance_scale,
     height,
     width,
-    micro_batch_size=1, # Change to 2 or 4 if you have plenty of VRAM headroom
+    micro_batch_size=None,
     device="cuda"
 ):
     """
@@ -448,6 +459,8 @@ def generate_images_from_latents_flux(
     pooled_all = to_correct_tensor(pooled_prompt_embedding, is_pooled=True)
     
     total_samples = latents_all.shape[0]
+    if micro_batch_size is None:
+        micro_batch_size = min(total_samples, 4)
     all_images = []
 
     # --- 2. Micro-Batch Loop ---
@@ -673,6 +686,7 @@ def setup_models(
             latent_img_ids=latent_img_ids,
             num_inference_steps=config.model.num_inference_steps,
             guidance_scale=config.model.guidance_scale,
+            micro_batch_size=min(config.model.micro_batch_size, config.batch_size),
             height=height,
             width=width,
             device=device
