@@ -1,0 +1,8 @@
+name: "cads-flux"
+type: "cads-flux"
+genotype: "latent"
+
+tau1: 0.5
+tau2: 0.9
+noise_scale_s: 0.05
+mixing_factor_psi: 1.0

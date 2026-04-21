@@ -23,6 +23,7 @@ from emitters.custom_es_emitter import DictEvolutionStrategyEmitter
 from emitters.custom_sep_cma_es import CMAESDictEmitter
 from emitters.custom_gaussian import GaussianDictEmitter
 from emitters.custom_isoline import IsoLineDictEmitter
+from emitters.cads_flux_emitter import CADSFluxEmitter
 from emitters.diverse_diffusion_emitter import DiverseDiffusionMaxEmitter
 from emitters.flux_hidden_layer_emitter import FluxHiddenLayerEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
@@ -655,6 +656,22 @@ def main(config: DictConfig) -> None:
                 device=device,  
             )
             emitters = [emitter_1, emitter_2, emitter_3]
+    
+    elif config.emitter.type == "cads-flux":
+        emitter = CADSFluxEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            pipe=pipe,
+            text_ids=text_ids,
+            latent_img_ids=latent_img_ids,
+            batch_size=config.batch_size,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            tau1=config.emitter.tau1,
+            tau2=config.emitter.tau2,
+            noise_scale_s=config.emitter.noise_scale_s,
+            mixing_factor_psi=config.emitter.mixing_factor_psi,
+        )
             
     elif config.emitter.type == "random_seeds":
         emitter = RandomSeedEmitter(
