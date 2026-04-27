@@ -26,6 +26,7 @@ from emitters.custom_isoline import IsoLineDictEmitter
 from emitters.cads_flux_emitter import CADSFluxEmitter
 from emitters.diverse_diffusion_emitter import DiverseDiffusionMaxEmitter
 from emitters.flux_hidden_layer_emitter import FluxHiddenLayerEmitter
+from emitters.particle_guidance_flux_emitter import ParticleGuidanceFluxEmitter
 from emitters.hidden_layer_emitter import SDHiddenLayerEmitter
 from emitters.imagebreeder import ImageBreederEmitter
 from emitters.dict_scheduler import DictScheduler
@@ -672,7 +673,22 @@ def main(config: DictConfig) -> None:
             noise_scale_s=config.emitter.noise_scale_s,
             mixing_factor_psi=config.emitter.mixing_factor_psi,
         )
-            
+    
+    elif config.emitter.type == "particle-guidance-flux":
+        emitter = ParticleGuidanceFluxEmitter(
+            archive=archive,
+            initial_solution=initial_solution,
+            pipe=pipe,
+            text_ids=text_ids,
+            latent_img_ids=latent_img_ids,
+            batch_size=config.batch_size,
+            num_inference_steps=config.model.num_inference_steps,
+            guidance_scale=config.model.guidance_scale,
+            particle_coeff=config.emitter.particle_coeff,
+            sigma_threshold=config.emitter.sigma_threshold,
+            use_dino=config.emitter.use_dino,
+        )
+        
     elif config.emitter.type == "random_seeds":
         emitter = RandomSeedEmitter(
             archive=archive,

@@ -1,0 +1,7 @@
+name: "particle-guidance-flux"
+type: "particle-guidance-flux"
+genotype: "latent"
+
+particle_coeff: 1.0 # Higher values → stronger repulsion → more diverse outputs but potentially degraded quality,
+sigma_threshold: 0.5 
+use_dino: false
