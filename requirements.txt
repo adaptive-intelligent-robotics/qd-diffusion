@@ -25,6 +25,7 @@ mediapy
 nni
 notebook
 numpy
+openai
 opencv-python
 optax
 optimum

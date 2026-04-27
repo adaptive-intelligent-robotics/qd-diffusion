@@ -50,12 +50,15 @@ class DiverseDiffusionMaxEmitter(EmitterBase):
         return min(dists)
 
     def ask(self):
-        # 1. Start with the template from our seed (prompts, etc.)
-        # In a 1-step Turbo setting, we usually keep the prompt constant 
-        # for the whole batch.
+        # 1. Pick parent for non-latent fields (prompt embeddings etc.)
+        if self.archive.empty:
+            parent = self._seed_sol
+        else:
+            sampled = self.archive.sample_elites(1)["solution"]
+            parent = {k: v[0] for k, v in sampled.items()}
+
         final_batch = {}
-        for k, v in self._seed_sol.items():
-            # Ensure template is repeated for the batch
+        for k, v in parent.items():
             if v.ndim == len(self._solution_schema[k]):
                 v = v[np.newaxis, ...]
             final_batch[k] = np.repeat(v, self.batch_size, axis=0)
