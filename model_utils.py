@@ -652,25 +652,46 @@ def setup_models(
             transformer=transformer,
             torch_dtype=torch.bfloat16
         )
+
+        # For WANDER, keep text encoders on CPU throughout — they are only used
+        # to re-encode evolved prompts and must never occupy GPU VRAM.
+        # Temporarily remove them before pipe.to("cuda") so they are never moved.
+        if config.emitter.type == "wander":
+            _wander_te1 = pipe.text_encoder
+            _wander_te2 = pipe.text_encoder_2
+            pipe.text_encoder = None
+            pipe.text_encoder_2 = None
+
         pipe.to("cuda")
-        
+
+        # Restore CPU-resident text encoders for WANDER
+        if config.emitter.type == "wander":
+            pipe.text_encoder = _wander_te1
+            pipe.text_encoder_2 = _wander_te2
+
         # Flux uses packed latents; standard height/width are divided by 2
         height, width = 1024, 1024 # Standard for Flux
         num_channels_latents = pipe.transformer.config.in_channels // 4
         latents_h = 2 * (int(height) // (pipe.vae_scale_factor * 2))
         latents_w = 2 * (int(width) // (pipe.vae_scale_factor * 2))
-        
+
         # Initial Noise
-        init_latent = torch.randn(1, num_channels_latents, latents_h, latents_w, 
+        init_latent = torch.randn(1, num_channels_latents, latents_h, latents_w,
                                 device=device, generator=generator, dtype=torch.bfloat16)
-        
+
         # Pack and prepare IDs
         init_latent = pipe._pack_latents(init_latent, 1, num_channels_latents, latents_h, latents_w)
-        latent_img_ids = pipe._prepare_latent_image_ids(1, latents_h // 2, latents_w // 2, 
+        latent_img_ids = pipe._prepare_latent_image_ids(1, latents_h // 2, latents_w // 2,
                                                     device=device, dtype=torch.float32)
-        
-        # Encode Prompt
-        prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(prompt, device=device)
+
+        # Encode Prompt — WANDER encodes on CPU; text_ids moved to GPU afterwards
+        if config.emitter.type == "wander":
+            prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
+                prompt, device=torch.device("cpu")
+            )
+            text_ids = text_ids.to(device)
+        else:
+            prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(prompt, device=device)
 
         solution_schema = {
             "latent": init_latent.squeeze(0).shape,
@@ -711,8 +732,10 @@ def setup_models(
         }
 
         # --- VRAM Cleanup ---
-        # Deleting encoders and tokenizers as they are no longer needed in the QD loop
-        del pipe.text_encoder, pipe.text_encoder_2, pipe.tokenizer, pipe.tokenizer_2
+        # WANDER: text encoders never went to GPU, already on CPU — nothing to do.
+        # All other emitters: delete them to free VRAM.
+        if config.emitter.type != "wander":
+            del pipe.text_encoder, pipe.text_encoder_2, pipe.tokenizer, pipe.tokenizer_2
         gc.collect()
         torch.cuda.empty_cache()
         

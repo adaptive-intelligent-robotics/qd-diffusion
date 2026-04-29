@@ -230,12 +230,12 @@ class FluxHiddenLayerEmitter(EmitterBase):
             # Seed solution is CPU-bound; ensure it's on device and correct dtype
             parent_sol = {k: v.to(self.device) for k, v in self._seed_sol.items()}
         else:
-            # Sample from archive (numpy float32)
+            # Sample from archive (numpy float32); skip "image" — not needed for mutation
             sampled = self.archive.sample_elites(1)["solution"]
-            # Convert to torch and match transformer dtype (bfloat16)
+            _mutation_keys = {"latent", "prompt_embedding", "pooled_prompt_embedding"}
             parent_sol = {
-                k: torch.from_numpy(v[0]).to(device=self.device, dtype=self.pipe.transformer.dtype) 
-                for k, v in sampled.items()
+                k: torch.from_numpy(v[0]).to(device=self.device, dtype=self.pipe.transformer.dtype)
+                for k, v in sampled.items() if k in _mutation_keys
             }
 
         # Ensure Parent shapes are [1, Seq, Dim] for the Transformer
@@ -271,15 +271,17 @@ class FluxHiddenLayerEmitter(EmitterBase):
         if self.mutation_type == "svd":
             was_cp = self.pipe.transformer.is_gradient_checkpointing
             self.pipe.transformer.enable_gradient_checkpointing()
+            torch.cuda.empty_cache()
             try:
                 basis = compute_flux_svd_basis(
-                    self.pipe, x_t, t_val, p_embeds, p_pooled, 
+                    self.pipe, x_t, t_val, p_embeds, p_pooled,
                     self.text_ids, self.latent_img_ids,
-                    self.mutation_key, self.svd_layer, self.guidance_scale, 
+                    self.mutation_key, self.svd_layer, self.guidance_scale,
                     k=self.svd_k, iters=self.svd_iters, eps=self.svd_fd_eps, device=self.device
                 )
             finally:
-                if was_cp: self.pipe.transformer.enable_gradient_checkpointing()
+                if not was_cp:
+                    self.pipe.transformer.disable_gradient_checkpointing()
 
         # 5. Sequential Generation of the Mutated Batch
         # Key "latent" is singular as requested
