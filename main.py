@@ -33,7 +33,7 @@ from emitters.dict_scheduler import DictScheduler
 from emitters.qdhf_models import get_qdhf_archive, update_qdhf_diversity_model
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
-from emitters.wander_emitter import WanderEmitter
+# from emitters.wander_emitter import WanderEmitter
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
     get_sdxl_prompt_embeddings,
