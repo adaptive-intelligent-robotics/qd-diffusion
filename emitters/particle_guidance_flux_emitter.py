@@ -381,7 +381,7 @@ class ParticleGuidanceFluxEmitter(EmitterBase):
         prompt_emb_batch = prompt_embedding.expand(N, -1, -1).contiguous()  # [N, seq_len, 4096]
         pooled_emb_batch = pooled_embedding.expand(N, -1).contiguous()      # [N, 768]
 
-        for i, t in enumerate(timesteps[:-1]):
+        for i, t in enumerate(timesteps):
             guidance = torch.full(
                 [1], self.guidance_scale,
                 device=device,
