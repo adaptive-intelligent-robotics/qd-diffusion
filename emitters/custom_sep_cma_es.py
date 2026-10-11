@@ -38,7 +38,7 @@ class CMAESDictEmitter(EmitterBase):
         self._num_parents = num_parents
         super().__init__(archive=archive, solution_dim=(), bounds=bounds, lower_bounds=None, upper_bounds=None)
         
-        # Instantiate the Optimizer (The class you provided in the previous turn)
+        # Instantiate the optimizer
         self.es = SeparableCMAESDict(
             initial_solution=initial_solution,
             mutation_key=mutation_key,
@@ -187,8 +187,6 @@ class SeparableCMAESDict(EvolutionStrategyBase):
         
         # Handle dict input for reset
         if isinstance(x0, dict):
-             # Update seed cache if needed
-             # (Optional: you might want to update self._seed_sol here)
                flat_x0 = self._to_numpy_safe(x0[self.mutation_key]).flatten()
         else:
              flat_x0 = x0

@@ -350,7 +350,7 @@ def generate_images_from_latents_sdxl_turbo(
 
     for t in scheduler.timesteps:
         
-        # FIX 1: Use a temporary variable for the input, DO NOT overwrite 'latents'
+        # Use a temporary variable for the model input; 'latents' must not be overwritten
         latent_model_input = scheduler.scale_model_input(latents, timestep=t)
 
         # Prepare SDXL added conditioning
@@ -376,8 +376,7 @@ def generate_images_from_latents_sdxl_turbo(
                     added_cond_kwargs=added_cond_kwargs
                 ).sample
 
-        # FIX 2: Un-indent this so it runs regardless of with_grad
-        # Use the ORIGINAL 'latents' variable here
+        # Step with the original 'latents' variable
         latents = scheduler.step(noise_pred, t, latents).prev_sample
 
     # --- 4. Decode ---
@@ -646,28 +645,14 @@ def setup_models(
             torch_dtype=torch.bfloat16
         )
 
-        # 2. Load the Pipeline and pass the pre-quantized transformer
+        # Load the Pipeline and pass the pre-quantized transformer
         pipe = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
             transformer=transformer,
             torch_dtype=torch.bfloat16
         )
 
-        # For WANDER, keep text encoders on CPU throughout — they are only used
-        # to re-encode evolved prompts and must never occupy GPU VRAM.
-        # Temporarily remove them before pipe.to("cuda") so they are never moved.
-        if config.emitter.type == "wander":
-            _wander_te1 = pipe.text_encoder
-            _wander_te2 = pipe.text_encoder_2
-            pipe.text_encoder = None
-            pipe.text_encoder_2 = None
-
         pipe.to("cuda")
-
-        # Restore CPU-resident text encoders for WANDER
-        if config.emitter.type == "wander":
-            pipe.text_encoder = _wander_te1
-            pipe.text_encoder_2 = _wander_te2
 
         # Flux uses packed latents; standard height/width are divided by 2
         height, width = 1024, 1024 # Standard for Flux
@@ -684,14 +669,8 @@ def setup_models(
         latent_img_ids = pipe._prepare_latent_image_ids(1, latents_h // 2, latents_w // 2,
                                                     device=device, dtype=torch.float32)
 
-        # Encode Prompt — WANDER encodes on CPU; text_ids moved to GPU afterwards
-        if config.emitter.type == "wander":
-            prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(
-                prompt, device=torch.device("cpu")
-            )
-            text_ids = text_ids.to(device)
-        else:
-            prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(prompt, device=device)
+        # Encode Prompt
+        prompt_embeds, pooled_prompt_embeds, text_ids = pipe.encode_prompt(prompt, device=device)
 
         solution_schema = {
             "latent": init_latent.squeeze(0).shape,
@@ -732,10 +711,7 @@ def setup_models(
         }
 
         # --- VRAM Cleanup ---
-        # WANDER: text encoders never went to GPU, already on CPU — nothing to do.
-        # All other emitters: delete them to free VRAM.
-        if config.emitter.type != "wander":
-            del pipe.text_encoder, pipe.text_encoder_2, pipe.tokenizer, pipe.tokenizer_2
+        del pipe.text_encoder, pipe.text_encoder_2, pipe.tokenizer, pipe.tokenizer_2
         gc.collect()
         torch.cuda.empty_cache()
         

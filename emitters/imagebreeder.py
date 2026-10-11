@@ -98,7 +98,6 @@ class ImageBreederEmitter(EmitterBase):
         Corresponds to: fitness_latent_blend_crossover
         Calculates alpha based on fitness scores.
         """
-        # Logic: score1 = individ1[1] if individ1[1] > 0 else 0
         s1 = max(0, score1)
         s2 = max(0, score2)
         
@@ -232,7 +231,6 @@ class ImageBreederEmitter(EmitterBase):
             return batch
 
         # Prepare Random Split Points (Crossover Points)
-        # "expect ... a random split point"
         crossover_points = self._rng.random(size=self.batch_size).astype(np.float32)
 
         final_batch = {}
@@ -272,7 +270,7 @@ class ImageBreederEmitter(EmitterBase):
             final_batch["latent"][i] = res_latent
 
             # 2. Handle PROMPTS (Keep Constant)
-            # "paper only mutates the latent, not the prompt"
+            # Prompts are kept constant: only the latent is mutated
             for k in p1.keys():
                 if k != "latent":
                     # Just inherit from Parent 1

@@ -1,5 +1,5 @@
 import numpy as np
-import torch  # Added import to check for tensors
+import torch
 from ribs.emitters._emitter_base import EmitterBase
 from typing import Dict, Optional
 
@@ -36,7 +36,7 @@ class GaussianDictEmitter(EmitterBase):
         if initial_solution is None:
             raise ValueError("initial_solution must be provided as the seed.")
 
-        # --- [FIX] Sanitize Seed: Convert Tensors to NumPy ---
+        # --- Sanitize Seed: Convert Tensors to NumPy ---
         self._seed_sol = {}
         for k, v in initial_solution.items():
             if isinstance(v, torch.Tensor):

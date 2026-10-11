@@ -75,7 +75,7 @@ class DictScheduler(Scheduler):
             # Fallback for non-dict
             full_solution = np.concatenate(self._cur_solutions, axis=0)
 
-        # 2. [NEW] Merge "Phenotype" (Images) into Solution
+        # 2. Merge "Phenotype" (Images) into Solution
         # We look for keys in 'fields' that are actually part of the solution schema
         fields_to_keep = {}
         

@@ -17,9 +17,6 @@ from ribs.typing import BatchData, Float, Int
 
 from emitters.custom_sep_cma_es import SeparableCMAESDict
 
-# NOTE: Ensure your custom dict-aware optimisers are imported
-# from your_custom_module import SeparableCMAESDict, CMAESDict
-
 
 class DictEvolutionStrategyEmitter(EmitterBase):
     """Adapts a distribution of dictionary solutions with an ES.
@@ -109,8 +106,6 @@ class DictEvolutionStrategyEmitter(EmitterBase):
             if es == "sep_cma_es":
                 es_class = SeparableCMAESDict
             elif es == "cma_es":
-                # Assuming you wrap the standard CMAEvolutionStrategy similarly
-                # NOT IMPLEMENTED HERE - you would need to create a CMAESDict class that handles dict solutions
                 raise NotImplementedError("Standard CMA-ES for dict solutions is not implemented. Please use 'sep_cma_es' or provide a custom class.")
             else:
                 raise ValueError(f"Unsupported ES string for Dict Emitter: {es}")

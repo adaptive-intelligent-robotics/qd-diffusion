@@ -91,17 +91,23 @@ def flux_invert(pipe, latents, prompt_embeds, pooled_prompt_embeds,
 # 2. SVD SENSITIVITY CALCULATION
 # =============================================================================
 
-def compute_flux_svd_basis(pipe, x_t, t_val, prompt_embeds, pooled_prompt_embeds, 
-                           text_ids, latent_img_ids, mutation_key, layer_name, 
+def compute_flux_svd_basis(pipe, x_t, t_val, prompt_embeds, pooled_prompt_embeds,
+                           text_ids, latent_img_ids, mutation_key, layer_name,
                            guidance_scale, k=5, iters=5, eps=1e-3, device="cuda"):
     """
-    Computes top-k singular vectors of Jacobian d(Hidden)/d(Target).
-    Added 'eps' parameter to the signature.
+    Approximates the top-k right singular vectors of d(hidden)/d(target) via a
+    randomised range-finder (Halko et al. 2011). Uses only no_grad forward passes —
+    no backward through the quantised transformer, so no bitsandbytes OOM.
+
+    Algorithm:
+      1. Sample n_sketch random input directions (Omega).
+      2. Compute Y = J * Omega^T column-by-column via finite differences.
+      3. SVD of Y gives left singular vectors U (in sketch space).
+      4. Input-space basis = Omega^T @ U[:, :k]  (combinations of random dirs).
     """
     target_module = _get_target_layer_flux(pipe.transformer, layer_name)
     t = torch.as_tensor(t_val, device=device).view(1)
-    
-    # Detach to start a fresh gradient graph
+
     l_base = x_t.detach()
     p_base = prompt_embeds.detach()
     pp_base = pooled_prompt_embeds.detach()
@@ -114,61 +120,54 @@ def compute_flux_svd_basis(pipe, x_t, t_val, prompt_embeds, pooled_prompt_embeds
         try:
             with pipe.transformer.cache_context("cond"):
                 pipe.transformer(
-                    hidden_states=l, timestep=t/1000, guidance=guidance, 
-                    pooled_projections=pp, encoder_hidden_states=p, 
+                    hidden_states=l, timestep=t/1000, guidance=guidance,
+                    pooled_projections=pp, encoder_hidden_states=p,
                     txt_ids=text_ids, img_ids=latent_img_ids, return_dict=False
                 )
             return feat[0].reshape(-1)
         finally:
             h.remove()
 
-    # Identify target for differentiation
     if mutation_key == "latent": target_init = l_base
     elif mutation_key == "prompt_embedding": target_init = p_base
     else: target_init = pp_base
 
+    n_sketch = k * iters  # same forward-pass budget as the old power-iteration
     rng = torch.Generator(device=device).manual_seed(42)
-    basis = []
-    
+
     with torch.no_grad():
         y0 = get_hidden(l_base, p_base, pp_base)
-    
-    for _ in range(k):
-        v = torch.randn(target_init.shape, device=device, dtype=target_init.dtype, generator=rng)
-        for p in basis: v -= (v.flatten() @ p.flatten()) * p
-        v /= (v.norm() + 1e-8)
-        
-        for __ in range(iters):
-            # Forward Finite Difference for Jv
-            with torch.no_grad():
-                current_eps = eps
-                l, p, pp = l_base.clone(), p_base.clone(), pp_base.clone()
-                if mutation_key == "latent": l += current_eps * v
-                elif mutation_key == "prompt_embedding": p += current_eps * v
-                else: pp += current_eps * v
-                Jv = (get_hidden(l, p, pp) - y0) / current_eps
-            
-            # VJP via Autograd
-            l, p, pp = l_base.clone(), p_base.clone(), pp_base.clone()
-            if mutation_key == "latent": target = l.requires_grad_(True); l = target
-            elif mutation_key == "prompt_embedding": target = p.requires_grad_(True); p = target
-            else: target = pp.requires_grad_(True); pp = target
 
-            y_req = get_hidden(l, p, pp)
-            grad = torch.autograd.grad((y_req * Jv.detach()).sum(), target)[0]
-            
-            # Orthogonalize and normalize
-            v_new = grad
-            for p in basis: v_new -= (v_new.flatten() @ p.flatten()) * p
-            
-            # Check norm before normalization
-            if v_new.norm().item() < 1e-10:
-                break
-                
-            v = (v_new / (v_new.norm() + 1e-8)).detach()
-            
-        basis.append(v)
-    
+        # Omega: (n_sketch x input_dim) — normalised random input directions
+        Omega = torch.randn(n_sketch, target_init.numel(), device=device,
+                            dtype=target_init.dtype, generator=rng)
+        Omega = Omega / (Omega.norm(dim=1, keepdim=True) + 1e-8)
+
+        # Y: (n_sketch x output_dim) — image of each random direction under J
+        Y_rows = []
+        for i in range(n_sketch):
+            v_i = Omega[i].reshape(target_init.shape)
+            l, p, pp = l_base.clone(), p_base.clone(), pp_base.clone()
+            if mutation_key == "latent": l = l + eps * v_i
+            elif mutation_key == "prompt_embedding": p = p + eps * v_i
+            else: pp = pp + eps * v_i
+            torch.cuda.empty_cache()
+            Y_rows.append((get_hidden(l, p, pp) - y0) / eps)
+            del l, p, pp, v_i
+
+        Y = torch.stack(Y_rows, dim=0)  # (n_sketch x output_dim)
+        del Y_rows
+
+        # Left singular vectors of Y reveal which sketch directions span
+        # the dominant output subspace; project back to input space via Omega.
+        U, _, _ = torch.linalg.svd(Y.float(), full_matrices=False)  # svd requires fp32
+        del Y
+
+        basis = []
+        for i in range(k):
+            b = (U[:, i].to(Omega.dtype) @ Omega).reshape(target_init.shape)
+            basis.append(b / (b.norm() + 1e-8))
+
     return basis
 
 # =============================================================================
@@ -266,11 +265,12 @@ class FluxHiddenLayerEmitter(EmitterBase):
             self.guidance_scale
         )
 
-        # 4. SVD Calculation (Requires Checkpointing for VRAM)
+        # 4. SVD Calculation — all no_grad forward passes, no backward needed
         basis = None
         if self.mutation_type == "svd":
             was_cp = self.pipe.transformer.is_gradient_checkpointing
-            self.pipe.transformer.enable_gradient_checkpointing()
+            if was_cp:
+                self.pipe.transformer.disable_gradient_checkpointing()
             torch.cuda.empty_cache()
             try:
                 basis = compute_flux_svd_basis(
@@ -280,11 +280,10 @@ class FluxHiddenLayerEmitter(EmitterBase):
                     k=self.svd_k, iters=self.svd_iters, eps=self.svd_fd_eps, device=self.device
                 )
             finally:
-                if not was_cp:
-                    self.pipe.transformer.disable_gradient_checkpointing()
+                if was_cp:
+                    self.pipe.transformer.enable_gradient_checkpointing()
 
         # 5. Sequential Generation of the Mutated Batch
-        # Key "latent" is singular as requested
         new_batch = {"latent": [], "prompt_embedding": [], "pooled_prompt_embedding": []}
         
         def prepare_for_archive(t):

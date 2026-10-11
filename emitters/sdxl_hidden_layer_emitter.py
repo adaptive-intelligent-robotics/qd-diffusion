@@ -33,8 +33,8 @@ def compute_latents_svd(
     scheduler, 
     k=1, 
     iters=10,
-    fd_eps=1e-2,        # <--- Added
-    layer="mid_block"   # <--- Added
+    fd_eps=1e-2,
+    layer="mid_block"
 ):
     xT = latents.detach().clone()
     scheduler.set_timesteps(1)
@@ -100,8 +100,8 @@ def compute_embedding_svd(
     target_type="pooled",
     k=1,
     iters=10,
-    fd_eps=1e-2,      # <--- Added
-    layer="mid_block" # <--- Added
+    fd_eps=1e-2,
+    layer="mid_block"
 ):
     device = target_tensor.device
     dtype = target_tensor.dtype
@@ -168,7 +168,7 @@ def compute_embedding_svd(
 
 
 # =============================================================================
-# 2. THE UPDATED EMITTER
+# 2. THE EMITTER
 # =============================================================================
 
 class SDXLHiddenLayerEmitter(EmitterBase):
@@ -193,7 +193,6 @@ class SDXLHiddenLayerEmitter(EmitterBase):
         svd_k: int = 5,
         svd_iters: int = 5,
         
-        # [ADDED] The missing params
         svd_fd_eps: float = 1e-2, 
         svd_layer: str = "mid_block",
         
@@ -221,7 +220,7 @@ class SDXLHiddenLayerEmitter(EmitterBase):
         self.svd_k = svd_k
         self.svd_iters = svd_iters
         
-        # [ADDED] Store them
+        # Store SVD finite-difference and layer settings
         self.svd_fd_eps = svd_fd_eps
         self.svd_layer = svd_layer
         
@@ -284,8 +283,8 @@ class SDXLHiddenLayerEmitter(EmitterBase):
                     self._unet, self._scheduler, 
                     k=self.svd_k, 
                     iters=self.svd_iters,
-                    fd_eps=self.svd_fd_eps,   # <--- Pass it
-                    layer=self.svd_layer      # <--- Pass it
+                    fd_eps=self.svd_fd_eps,
+                    layer=self.svd_layer
                 )
             else:
                 t_type = "pooled" if self.mutation_key == "pooled_prompt_embedding" else "prompt"
@@ -297,8 +296,8 @@ class SDXLHiddenLayerEmitter(EmitterBase):
                     target_type=t_type,
                     k=self.svd_k, 
                     iters=self.svd_iters,
-                    fd_eps=self.svd_fd_eps,   # <--- Pass it
-                    layer=self.svd_layer      # <--- Pass it
+                    fd_eps=self.svd_fd_eps,
+                    layer=self.svd_layer
                 )
 
         # 4. Generate Batch

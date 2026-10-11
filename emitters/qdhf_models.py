@@ -248,7 +248,7 @@ def update_qdhf_diversity_model(archive, init_solution, scoring_function, config
                 
                 batch_sols[k] = repeated
 
-            # Scoring returns 5 values now: fitnesses, qdhf_fitness, dreamsim, clip, images
+            # Scoring returns 5 values: fitnesses, qdhf_fitness, dreamsim, clip, images
             _, _, dreamsim_feature, clip_feature, _ = scoring_function(batch_sols)
             
             # Move to CPU to save VRAM while collecting

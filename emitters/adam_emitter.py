@@ -153,8 +153,7 @@ def prepare_adam_loss_fn(
         # Define loss function based on mutation key
         if genotype == "latent":
             def adam_loss_fn(genotypes: torch.Tensor) -> torch.Tensor:
-                # genotypes shape: (1, 4, 64, 64) -> squeeze to (1, 4, 64, 64) (keep batch dim for latents)
-                # Actually latents need the batch dimension, so no squeeze needed
+                # genotypes shape: (1, 4, 64, 64); latents keep the batch dimension
                 generated_images = generate_images_from_latents(
                     latents=genotypes,
                     prompt_embedding=prompt_embeds_init,

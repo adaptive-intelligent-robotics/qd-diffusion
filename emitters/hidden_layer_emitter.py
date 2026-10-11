@@ -135,7 +135,7 @@ def compute_latents_svd(
             h.remove()
 
     # 2. Power Iteration
-    # [FIX] Ensure seed is an integer
+    # Ensure seed is an integer
     safe_seed = int(seed) if seed is not None else 42
     rng = torch.Generator(device=device).manual_seed(safe_seed)
     vecs = []
@@ -215,7 +215,7 @@ def compute_embedding_svd(
             h.remove()
 
     # 2. Power Iteration
-    # [FIX] Ensure seed is an integer
+    # Ensure seed is an integer
     safe_seed = int(seed) if seed is not None else 42
     rng = torch.Generator(device=device).manual_seed(safe_seed)
     vecs = []
@@ -391,7 +391,7 @@ class SDHiddenLayerEmitter(EmitterBase):
                     scheduler=self._scheduler, prompt_embedding=current_prompt_embed,
                     k=self._svd_k, iters=self._svd_iters, fd_eps=self._svd_fd_eps,
                     layer=self._svd_layer, device=self._device,
-                    # [FIX] Cast generated numpy int to python int
+                    # Cast generated numpy int to python int
                     seed=int(self._rng.integers(1e6))
                 )
             elif self.mutation_key == "prompt_embedding":
@@ -400,7 +400,7 @@ class SDHiddenLayerEmitter(EmitterBase):
                     scheduler=self._scheduler, prompt_embedding=current_prompt_embed,
                     k=self._svd_k, iters=self._svd_iters, fd_eps=self._svd_fd_eps,
                     layer=self._svd_layer, device=self._device,
-                    # [FIX] Cast generated numpy int to python int
+                    # Cast generated numpy int to python int
                     seed=int(self._rng.integers(1e6))
                 )
 

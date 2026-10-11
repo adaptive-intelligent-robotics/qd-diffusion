@@ -2,7 +2,6 @@ import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
-import gc
 import hydra
 import logging
 import numpy as np
@@ -33,11 +32,8 @@ from emitters.dict_scheduler import DictScheduler
 from emitters.qdhf_models import get_qdhf_archive, update_qdhf_diversity_model
 from emitters.random_seed import RandomSeedEmitter
 from emitters.sdxl_hidden_layer_emitter import SDXLHiddenLayerEmitter
-# from emitters.wander_emitter import WanderEmitter
 from metrics import CSVLogger, me_metrics_function
 from model_utils import (
-    get_sdxl_prompt_embeddings,
-    get_text_embeddings,
     plot_repertoire_images,
     save_offspring_data,
     save_repertoire,
@@ -943,64 +939,6 @@ def main(config: DictConfig) -> None:
                 )
                 emitters.append(emitter_3)
                 
-    elif config.emitter.type == "wander":
-        if config.model.name == "sdxl-turbo":
-            def _prompt_encode_fn(prompt_str: str) -> dict:
-                with torch.no_grad():
-                    emb, pooled = get_sdxl_prompt_embeddings(
-                        [prompt_str],
-                        pipe.tokenizer,
-                        pipe.tokenizer_2,
-                        pipe.text_encoder,
-                        pipe.text_encoder_2,
-                        device,
-                    )
-                return {
-                    "prompt_embedding": emb[0].detach().cpu().float().numpy(),
-                    "pooled_prompt_embedding": pooled[0].detach().cpu().float().numpy(),
-                }
-
-        elif config.model.name == "flux":
-            def _prompt_encode_fn(prompt_str: str) -> dict:
-                # Force CPU device so T5/CLIP encoders (kept on CPU) never touch GPU
-                with torch.no_grad():
-                    embeds, pooled, _ = pipe.encode_prompt(
-                        [prompt_str], device=torch.device("cpu")
-                    )
-                result = {
-                    "prompt_embedding": embeds[0].detach().cpu().float().numpy(),
-                    "pooled_prompt_embedding": pooled[0].detach().cpu().float().numpy(),
-                }
-                gc.collect()
-                torch.cuda.empty_cache()
-                return result
-
-        elif config.model.name == "sd-1-5":
-            def _prompt_encode_fn(prompt_str: str) -> dict:
-                emb = get_text_embeddings(
-                    prompt_str, 1, pipe.tokenizer, pipe.text_encoder
-                )
-                return {"prompt_embedding": emb.detach().cpu().float().numpy()}
-
-        else:
-            assert False, f"WANDER emitter: unsupported model '{config.model.name}'"
-
-        emitter = WanderEmitter(
-            archive=archive,
-            initial_solution=initial_solution,
-            initial_prompt=prompt,
-            prompt_encode_fn=_prompt_encode_fn,
-            batch_size=config.batch_size,
-            pool_size=config.emitter.pool_size,
-            k_neighbors=config.emitter.k_neighbors,
-            crossover_prob=config.emitter.crossover_prob,
-            llm_base_url=config.emitter.llm_base_url,
-            llm_api_key=config.emitter.llm_api_key,
-            gpt_model=config.emitter.gpt_model,
-            max_tokens=config.emitter.max_tokens,
-            seed=config.seed,
-        )
-
     else:
         assert False, "Emitter type not recognised"
                     
