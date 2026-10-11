@@ -49,7 +49,7 @@ class DNSDictArchive(ArchiveBase):
         self._qd_score_offset = qd_score_offset
         self._extra_fields = extra_fields or {}
 
-        # --- 1. DTYPE HANDLING (The Fix) ---
+        # --- 1. DTYPE HANDLING ---
         default_dtype = dtype if dtype is not None else np.float64
         
         # Helper to check specific arg -> dict key -> default scalar
@@ -103,8 +103,6 @@ class DNSDictArchive(ArchiveBase):
         self._num_elites = 0
         self._stats_reset()
         
-    # ... (Keep _stats_reset and properties same as before) ...
-    
     def _stats_reset(self):
         """Resets the archive stats."""
         self._best_elite = None
@@ -218,7 +216,7 @@ class DNSDictArchive(ArchiveBase):
 
         num_all = len(all_objs)
 
-        # 4. Logic / DNS Calculation (Same as before)
+        # 4. DNS Calculation
         fitter = all_objs[:, None] < all_objs[None, :]
         np.fill_diagonal(fitter, False)
 
@@ -330,7 +328,7 @@ class DNSDictArchive(ArchiveBase):
         
         # 1. Handle Empty Archive
         if self.empty:
-            # [FIX] Create a Dict of empty arrays for the solution
+            # Create a Dict of empty arrays for the solution
             empty_solutions = {
                 k: np.empty((0, *shape), dtype=self.dtypes["solution"])
                 for k, shape in self.solution_dim.items()
@@ -347,7 +345,7 @@ class DNSDictArchive(ArchiveBase):
             }
         else:
             # 2. Handle Populated Archive
-            # [FIX] Iterate over keys and slice the individual arrays
+            # Iterate over keys and slice the individual arrays
             sliced_solutions = {
                 k: arr[:self._num_elites].copy()
                 for k, arr in self._solutions.items()
@@ -375,7 +373,6 @@ class DNSDictArchive(ArchiveBase):
         
         if return_type == "dict_array":
             # Used by _stats_update to get single elite dicts
-            # This is slightly more complex now that solution is a dict
             results = []
             for i in range(self._num_elites):
                 elite = {}
@@ -395,7 +392,7 @@ class DNSDictArchive(ArchiveBase):
             return tuple(all_data[f] for f in fields)
         
         if return_type == "pandas":
-            # Pandas support for nested dicts is tricky, but basic flattening:
+            # Flatten nested solution dicts into columns
             try:
                 import pandas as pd
             except ImportError as e:
@@ -407,8 +404,7 @@ class DNSDictArchive(ArchiveBase):
                 if f == "solution":
                     # Flatten solution dict: solution_latent, solution_prompt...
                     for sol_k, sol_v in val.items():
-                        # For simplicity, we treat high-dim tensors as object columns
-                        # or flatten strictly 1D data.
+                        # High-dim tensors are stored as object columns
                         data_dict[f"solution_{sol_k}"] = list(sol_v)
                 elif f == "objective":
                     data_dict["objective"] = val
@@ -673,7 +669,6 @@ class DNSArchive(ArchiveBase):
             name: arr[candidate_mask_in_original_batch] for name, arr in data.items()
         }
         
-        # --- NEW THRESHOLDING LOGIC (END) ---
 
         
         # 2. Concatenate (now using `candidate_data`)
@@ -896,8 +891,7 @@ class DNSArchive(ArchiveBase):
                     "pandas is required for return_type='pandas'"
                 ) from e
             
-            # This part is complex to generalize for all field shapes.
-            # For simplicity, we'll flatten solutions and measures.
+            # Flatten 2D measures into one column per dimension
             data_dict = {}
             for f in fields:
                 arr = all_data[f]
@@ -906,7 +900,6 @@ class DNSArchive(ArchiveBase):
                 elif arr.ndim == 2:
                     for i in range(arr.shape[1]):
                         data_dict[f"{f}_{i}"] = arr[:, i]
-                # Add more logic here if solutions are multi-dimensional
             return pd.DataFrame(data_dict)
             
         raise ValueError(f"Unknown return_type: {return_type}")

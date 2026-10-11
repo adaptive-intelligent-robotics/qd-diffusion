@@ -62,7 +62,7 @@ class PassivePopulationArchive(ArchiveBase):
         self._batch_sizes = batch_sizes or []
         self._extra_fields = extra_fields or {}
         
-        # --- 1. DTYPE HANDLING (The Fix) ---
+        # --- 1. DTYPE HANDLING ---
         default_dtype = dtype if dtype is not None else np.float64
         
         def get_dt(target, key):

@@ -320,8 +320,7 @@ class GridDictArchive(ArchiveBase):
 
         # 5. Threshold Updates
         if self.threshold_min == -np.inf:
-            # We must use the objective from 'data' because 'meta_data' might not have it 
-            # if we filtered strictly (though objective is usually in store).
+            # Use the objective from 'data' since 'meta_data' may not contain it.
             new_threshold = data["objective"][can_insert]
         else:
             new_threshold = self._compute_thresholds(
@@ -354,7 +353,7 @@ class GridDictArchive(ArchiveBase):
         # We pass a sliced dummy solution to keep it happy
         final_meta["solution"] = np.zeros(len(final_indices), dtype=np.int8)
         
-        # CRITICAL FIX: Ensure final_meta ONLY has keys the store expects
+        # Ensure final_meta ONLY has keys the store expects
         keys_to_add = {k: v for k, v in final_meta.items() if k in valid_store_keys}
         
         self._store.add(final_indices, keys_to_add)
@@ -430,8 +429,6 @@ class GridDictArchive(ArchiveBase):
         # Fetch Real Solutions
         sol_parts = {}
         for k, store_arr in self._solution_store.items():
-            # Get valid data, fill unoccupied with nan/zeros
-            # We grab everything, then mask. 
             # Note: Unoccupied slots in _solution_store contain garbage/zeros.
             # PyRibs sentinel logic doesn't apply automatically to our custom store.
             retrieved = store_arr[indices]

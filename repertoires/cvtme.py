@@ -47,7 +47,7 @@ class CVTDictArchive(ArchiveBase):
     ):
         self._rng = np.random.default_rng(seed)
 
-        # --- MODIFICATION START: Handle Dict Schema ---
+        # --- Handle Dict Schema ---
         if isinstance(solution_dim, dict):
             self._solution_schema = solution_dim
             self._is_structured = True
@@ -57,7 +57,6 @@ class CVTDictArchive(ArchiveBase):
             self._solution_schema = {"solution": solution_dim}
             self._is_structured = False
             super_dim = solution_dim
-        # --- MODIFICATION END ---
 
         ArchiveBase.__init__(
             self,
@@ -87,7 +86,7 @@ class CVTDictArchive(ArchiveBase):
             "threshold": get_dt("objective"),
         }
 
-        # --- MODIFICATION START: Flatten Schema into Field Desc ---
+        # --- Flatten Schema into Field Desc ---
         # Instead of one "solution" field, we create fields for every key in the dict
         # e.g. "latent": (shape, dtype), "prompt": (shape, dtype)
         
@@ -107,9 +106,7 @@ class CVTDictArchive(ArchiveBase):
             field_desc=flat_field_desc,
             capacity=cells,
         )
-        # --- MODIFICATION END ---
 
-        # ... (Standard CVT Initialization - Unchanged) ...
         ranges = list(zip(*ranges))
         self._lower_bounds = np.array(ranges[0], dtype=self.dtypes["measures"])
         self._upper_bounds = np.array(ranges[1], dtype=self.dtypes["measures"])
@@ -209,7 +206,7 @@ class CVTDictArchive(ArchiveBase):
 
     @property
     def dtypes(self):
-        # [FIX] Return dtypes including "solution" key for compatibility with Emitters
+        # Return dtypes including "solution" key for compatibility with Emitters
         d = self._store.dtypes_with_index.copy()
         if self._is_structured and "solution" not in d:
             d["solution"] = self._dtypes["solution"]
@@ -235,7 +232,7 @@ class CVTDictArchive(ArchiveBase):
     def centroids(self):
         return self._centroids
 
-    # [FIX] Added missing properties required by add() and other methods
+    # Properties required by add() and other methods
     @property
     def lower_bounds(self):
         return self._lower_bounds
@@ -365,12 +362,12 @@ class CVTDictArchive(ArchiveBase):
         """
         Modified add to handle Dictionary Solutions.
         """
-        # --- MODIFICATION START: Pre-Validation Unpacking ---
+        # --- Pre-Validation Unpacking ---
         if self._is_structured:
             if not isinstance(solution, dict):
                 raise ValueError("Expected dictionary solution.")
             
-            # [FIX] Manually validate dictionary solution to bypass 'solution' key check in validate_batch
+            # Manually validate dictionary solution to bypass 'solution' key check in validate_batch
             
             # 1. Validate Standard Fields
             objective = np.asarray(objective, dtype=self.dtypes["objective"])
@@ -417,7 +414,6 @@ class CVTDictArchive(ArchiveBase):
                     **fields,
                 },
             )
-        # --- MODIFICATION END ---
 
         del solution, objective, measures, fields
 
@@ -481,9 +477,7 @@ class CVTDictArchive(ArchiveBase):
         return add_info
 
     def add_single(self, solution, objective, measures, **fields):
-        # Wrap the single add logic to support dicts
-        # For simplicity in this adaptation, we forward to add() with batch=1
-        # This avoids duplicating the messy unpacking logic
+        # Forward to add() with batch size 1
         
         # Batch dimensions
         objective_batch = np.expand_dims(objective, axis=0)
@@ -510,7 +504,7 @@ class CVTDictArchive(ArchiveBase):
         occupied, data = self._store.retrieve(self.index_of(measures))
         fill_sentinel_values(occupied, data)
 
-        # --- MODIFICATION: Repack ---
+        # Repack
         return occupied, self._repack_solution(data)
 
     def retrieve_single(self, measures):
@@ -540,7 +534,7 @@ class CVTDictArchive(ArchiveBase):
 
         # Now filter fields and convert type
         if fields is None:
-            fields = self.field_list # Uses store's list, but we need to inject "solution"
+            fields = self.field_list
             if self._is_structured:
                 # Remove individual component keys, add "solution"
                 fields = [f for f in fields if f not in self._solution_schema]
@@ -549,10 +543,6 @@ class CVTDictArchive(ArchiveBase):
         if return_type == "dict":
             return {f: all_data[f] for f in fields}
         
-        # Handle other return types logic similar to DNSDictArchive if needed
-        # But keeping it minimal for now as per "change as little as possible"
-        # The base `_store.data` supports tuple/pandas but on flat data.
-        # Here we manually handle dict.
         
         raise ValueError(f"CVTDictArchive currently only fully supports return_type='dict'. Got {return_type}")
 
