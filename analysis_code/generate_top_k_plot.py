@@ -1,11 +1,14 @@
+import argparse
 import os
 import torch
 import numpy as np
 import math
-import warnings  # <--- NEW IMPORT
+import warnings
 from PIL import Image
 from scipy.spatial.distance import cdist
 from typing import List
+
+import config
 
 # --- VISUAL SETTINGS ---
 THUMBNAIL_SIZE = (512, 512) 
@@ -72,7 +75,6 @@ def calculate_dns_scores(fitnesses: np.ndarray, descriptors: np.ndarray, k_neigh
     k_nearest_dists[np.isinf(k_nearest_dists)] = np.nan
     
     # DNS Score is mean distance to fitter neighbors
-    # --- FIX: Use standard warnings instead of np.warnings ---
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', category=RuntimeWarning)
         dns_score = np.nanmean(k_nearest_dists, axis=1)
@@ -176,3 +178,20 @@ def generate_top_k_grids(root_dir, seeds, algorithm_dicts, k=16, metric="fitness
                     print(f"  Error processing seed {seed}: {e}")
 
     print("Grid generation complete.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Save a grid of the top-k images for every run.")
+    config.add_model_argument(parser)
+    parser.add_argument("--top-k", type=int, default=16, help="Number of images per grid.")
+    parser.add_argument("--metric", choices=["fitness", "dns", "mixed"], default="fitness", help="How to rank images.")
+    args = parser.parse_args()
+
+    cfg = config.get_model_config(args.model)
+    generate_top_k_grids(
+        root_dir=cfg["root_dir"],
+        seeds=cfg["seeds"],
+        algorithm_dicts=cfg["algorithms"],
+        k=args.top_k,
+        metric=args.metric,
+    )

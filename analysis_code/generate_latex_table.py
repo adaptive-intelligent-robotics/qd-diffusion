@@ -1,8 +1,11 @@
+import argparse
 import os
 import pandas as pd
 import numpy as np
 from scipy.stats import wilcoxon
 from typing import List, Dict, Optional
+
+import config
 
 def get_experiment_subdir(base_path: str) -> Optional[str]:
     """
@@ -24,7 +27,7 @@ def load_all_seed_metrics(
     root_dir: str,
     algorithm_dicts: Dict,
     metrics_list: List[str],
-    seeds: range,
+    seeds: List[int],
     target_evaluations: Optional[int] = None,
 ) -> Dict[str, Dict[str, List[float]]]:
     """
@@ -52,7 +55,7 @@ def load_all_seed_metrics(
         valid_seeds_count = 0
 
         for seed in seeds:
-            initial_path = os.path.join(algo_config["root_dir"], str(seed), algo_config["path"])
+            initial_path = os.path.join(root_dir, str(seed), algo_config["path"])
             exp_path = get_experiment_subdir(initial_path)
             
             if exp_path is None:
@@ -122,7 +125,6 @@ def holm_bonf_correction(p_values):
     p_values = np.array(p_values)
     
     # Handle NaNs (if any)
-    nan_indices = np.argwhere(np.isnan(p_values)).flatten()
     non_nan_mask = ~np.isnan(p_values)
     non_nan_p_values = p_values[non_nan_mask]
 
@@ -160,89 +162,128 @@ def holm_bonf_correction(p_values):
 def calculate_statistical_significance(
     seed_values: Dict[str, Dict[str, List[float]]],
     metrics_list: List[str],
-    maximize_metrics: Optional[Dict[str, bool]] = None
+    maximize_metrics: Optional[Dict[str, bool]] = None,
+    base_algo_key: Optional[str] = None,
 ) -> tuple[Dict[str, Dict[str, float]], Dict[str, str]]:
     """
-    Calculate p-values comparing each algorithm to the best performer for each metric.
-    Uses one-vs-many comparison: best algorithm vs all others.
-    
+    Calculate p-values comparing each algorithm to a reference algorithm.
+
+    If base_algo_key is given, all algorithms are compared against that fixed
+    baseline (Wilcoxon signed-rank + Holm-Bonferroni correction).  Otherwise,
+    the best-performing algorithm for each metric is used as the reference.
+
     Args:
         seed_values: Dict mapping algo_key -> {metric: [values]}
         metrics_list: List of metrics to analyze
         maximize_metrics: Dict indicating whether each metric should be maximized
-        
+        base_algo_key: Key of the algorithm to use as the fixed baseline.
+                       When None, the best performer per metric is used.
+
     Returns:
         Tuple of:
         - Dict mapping metric -> {algo_key: p_value}
-        - Dict mapping metric -> best_algo_key
+        - Dict mapping metric -> reference_algo_key
     """
     if maximize_metrics is None:
         maximize_metrics = {m: True for m in metrics_list}
-    
+
     p_values = {m: {} for m in metrics_list}
     best_algos = {}
-    
+
     print("\n-------------------------------------------------------------------------")
-    print("                    Calculating Statistical Significance                 ")
-    print("                         (One-vs-Many Comparison)                        ")
+    if base_algo_key:
+        print(f"        Calculating Statistical Significance vs '{base_algo_key}'         ")
+    else:
+        print("                    Calculating Statistical Significance                 ")
+        print("                         (One-vs-Many Comparison)                        ")
     print("-------------------------------------------------------------------------")
-    
+
     for metric in metrics_list:
         print(f"\nMetric: {metric}")
-        
-        # Find best performing algorithm
-        means = {k: np.mean(v[metric]) for k, v in seed_values.items() if len(v[metric]) > 0}
-        if not means:
-            continue
-            
-        if maximize_metrics[metric]:
-            best_key = max(means.keys(), key=lambda k: means[k])
+
+        if base_algo_key is not None:
+            ref_key = base_algo_key
         else:
-            best_key = min(means.keys(), key=lambda k: means[k])
-        
-        best_algos[metric] = best_key
-        best_vals = np.array(seed_values[best_key][metric])
-        print(f"  Best algorithm: {best_key} (mean = {means[best_key]:.4f})")
-        
-        # Collect raw p-values for all comparisons against best
+            means = {k: np.mean(v[metric]) for k, v in seed_values.items() if len(v[metric]) > 0}
+            if not means:
+                continue
+            if maximize_metrics[metric]:
+                ref_key = max(means.keys(), key=lambda k: means[k])
+            else:
+                ref_key = min(means.keys(), key=lambda k: means[k])
+
+        best_algos[metric] = ref_key
+        ref_vals = np.array(seed_values[ref_key][metric])
+        ref_mean = np.mean(ref_vals) if len(ref_vals) > 0 else float("nan")
+        print(f"  Reference algorithm: {ref_key} (mean = {ref_mean:.4f})")
+
+        # The reference gets p=0.0 (it is the baseline by definition)
+        p_values[metric][ref_key] = 0.0
+
         raw_p_values = []
         algo_keys_for_correction = []
-        
-        # Compare each algorithm to the best
+
         for algo_key in seed_values.keys():
-            if algo_key == best_key:
-                p_values[metric][algo_key] = 0.0  # Best gets p=0 (definitely significant)
+            if algo_key == ref_key:
                 continue
-            
+
             algo_vals = np.array(seed_values[algo_key][metric])
-            
-            # Need matching lengths for paired test
-            min_len = min(len(best_vals), len(algo_vals))
-            
+            min_len = min(len(ref_vals), len(algo_vals))
+
             if min_len < 2:
                 p_values[metric][algo_key] = np.nan
                 continue
-            
+
             try:
-                # Wilcoxon signed-rank test (paired)
-                # Tests if distributions are different
-                stat, p = wilcoxon(best_vals[:min_len], algo_vals[:min_len])
+                _, p = wilcoxon(ref_vals[:min_len], algo_vals[:min_len])
                 raw_p_values.append(p)
                 algo_keys_for_correction.append(algo_key)
                 print(f"    {algo_key}: raw p-value = {p:.4f}")
             except ValueError:
-                # Occurs if all differences are zero (identical performance)
                 raw_p_values.append(1.0)
                 algo_keys_for_correction.append(algo_key)
-        
-        # Apply Holm-Bonferroni correction for multiple comparisons
+
         if raw_p_values:
             corrected = holm_bonf_correction(raw_p_values)
             for i, algo_key in enumerate(algo_keys_for_correction):
                 p_values[metric][algo_key] = corrected[i]
                 print(f"    {algo_key}: corrected p-value = {corrected[i]:.4f}")
-    
+
     return p_values, best_algos
+
+
+def save_p_values_csv(
+    p_values: Dict[str, Dict[str, float]],
+    algorithm_dicts: Dict,
+    metrics_list: List[str],
+    base_algo_key: str,
+    output_path: str,
+) -> None:
+    """Save Holm-Bonferroni-corrected p-values to a CSV file.
+
+    The reference algorithm is labelled "baseline".  A trailing '*' marks
+    p < 0.05 for all other algorithms.
+    """
+    rows = []
+    for algo_key, algo_config in algorithm_dicts.items():
+        row: Dict = {"Algorithm": algo_config["label"]}
+        for metric in metrics_list:
+            if algo_key == base_algo_key:
+                row[metric] = "baseline"
+            else:
+                p = p_values.get(metric, {}).get(algo_key, np.nan)
+                if np.isnan(p):
+                    row[metric] = "N/A"
+                else:
+                    sig = "*" if p < 0.05 else ""
+                    row[metric] = f"{p:.2e}{sig}"
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df.to_csv(output_path, index=False)
+    print(f"\nP-values saved to: {output_path}")
+    print(df.to_string(index=False))
 
 
 def generate_latex_table(
@@ -392,28 +433,24 @@ def generate_latex_table(
 
 
 if __name__ == "__main__":
-    """
-    Example usage
-    """
-    
-    # Configuration
-    ROOT_DIR = "/workspace/src/hpc_results/ablation_results/"
-    OUTPUT_DIR = "analysis_output"
-    SEEDS = [1, 4, 7, 10, 13, 16, 20, 22, 25, 28, 31, 34]
-    TARGET_EVALUATIONS = 2000
-    
-    # Define algorithms
-    
+    parser = argparse.ArgumentParser(description="Generate the results LaTeX table and p-values.")
+    config.add_model_argument(parser)
+    args = parser.parse_args()
+
+    cfg = config.get_model_config(args.model)
+    algo_dicts = cfg["algorithms"]
+    output_dir = cfg["output_dir"]
+
     metrics_labels = {
         "avg_fitness": "Avg. Fitness",
         "avg_pairwise_dist": "Avg. Pairwise Dist.",
         "total_variance": "Total Variance",
         "coverage": "Coverage",
         "num_solutions": "Num. Solutions",
-        "total_fitnesses": "Total Fitness"
+        "total_fitnesses": "Total Fitness",
     }
-    
-    # Specify which metrics to maximize (True) or minimize (False)
+
+    # Whether each metric is maximized (True) or minimized (False)
     maximize_metrics = {
         "avg_fitness": True,
         "avg_pairwise_dist": True,
@@ -422,53 +459,28 @@ if __name__ == "__main__":
         "total_fitnesses": True,
         "total_variance": True,
     }
-            
-    algo_dicts = {
-        "dns_svd_alpha-5": {
-            "root_dir": ROOT_DIR,
-            "path": "dns/multi-svd-hidden-layer-alpha-5",
-            "label": "Alpha: 5",
-            "grid_plot_linestyle": "solid",
-        },
-        "dns_svd": {
-            "root_dir": ROOT_DIR,
-            "path": "dns/multi-svd-hidden-layer",
-            "label": "Alpha: 10",
-            "grid_plot_linestyle": "solid",
-        },  
-        # "dns_svd_alpha-15": {
-        #     "root_dir": ROOT_DIR,
-        #     "path": "dns/multi-svd-hidden-layer-alpha-15",
-        #     "label": "Alpha: 15",
-        #     "grid_plot_linestyle": "solid",
-        # },
-        "dns_svd_alpha-20": {
-            "root_dir": ROOT_DIR,
-            "path": "dns/multi-svd-hidden-layer-alpha-20",
-            "label": "Alpha: 20",
-            "grid_plot_linestyle": "solid",
-        },
-    }
-    metrics_list = ["total_fitnesses", "avg_pairwise_dist", "num_solutions"]
 
-    
+    metrics_list = ["avg_pairwise_dist", "total_fitnesses", "num_solutions"]
+
     seed_values = load_all_seed_metrics(
-        root_dir=ROOT_DIR,
+        root_dir=cfg["root_dir"],
         algorithm_dicts=algo_dicts,
         metrics_list=metrics_list,
-        seeds=SEEDS,
+        seeds=cfg["seeds"],
     )
-    
-    # Calculate statistical significance
-    # Compares all algorithms to the best performer for each metric (one-vs-many)
     p_values, best_algos = calculate_statistical_significance(
         seed_values=seed_values,
         metrics_list=metrics_list,
-        maximize_metrics=maximize_metrics
+        maximize_metrics=maximize_metrics,
+        base_algo_key=config.BASE_ALGO_KEY,
     )
-    
-    # Generate LaTeX table
-    output_path = os.path.join(OUTPUT_DIR, "alpha_ablation.txt")
+    save_p_values_csv(
+        p_values=p_values,
+        algorithm_dicts=algo_dicts,
+        metrics_list=metrics_list,
+        base_algo_key=config.BASE_ALGO_KEY,
+        output_path=os.path.join(output_dir, "p_values.csv"),
+    )
     generate_latex_table(
         seed_values=seed_values,
         algorithm_dicts=algo_dicts,
@@ -476,8 +488,8 @@ if __name__ == "__main__":
         metrics_labels=metrics_labels,
         p_values=p_values,
         best_algos=best_algos,
-        output_path=output_path,
+        output_path=os.path.join(output_dir, "latex_results_table.txt"),
         maximize_metrics=maximize_metrics,
         significance_level=0.05,
-        show_std=True
+        show_std=True,
     )

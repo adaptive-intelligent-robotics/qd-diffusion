@@ -1,8 +1,11 @@
+import argparse
 import os
 import pandas as pd
 import numpy as np
-from scipy.stats import wilcoxon, mannwhitneyu
+from scipy.stats import wilcoxon
 from typing import List, Dict
+
+import config
 
 def get_experiment_subdir(base_path: str) -> str:
     """Finds the timestamped folder inside the algo path."""
@@ -18,7 +21,7 @@ def load_final_metrics(root_dir, algo_dicts, metrics, seeds):
     """
     final_data = {m: {k: [] for k in algo_dicts} for m in metrics}
 
-    print(f"Loading final metrics for statistical analysis...")
+    print("Loading final metrics for statistical analysis...")
 
     for algo_key, algo_config in algo_dicts.items():
         print(f"\nProcessing Algorithm: {algo_config['label']} ({algo_key})")
@@ -52,7 +55,6 @@ def load_final_metrics(root_dir, algo_dicts, metrics, seeds):
                     print(f"     Warning: Failed to load seed {seed}: {e}")
                     pass
         print(f"  -> Processed {valid_count} valid seeds.")
-        # Debug: print how many values were actually collected for each metric
         for metric in metrics:
             count = len(final_data[metric][algo_key])
             print(f"     Metric '{metric}': {count} values")
@@ -65,7 +67,6 @@ def holm_bonf_correction(p_values):
     p_values = np.array(p_values)
     
     # Handle NaNs (if any)
-    nan_indices = np.argwhere(np.isnan(p_values)).flatten()
     non_nan_mask = ~np.isnan(p_values)
     non_nan_p_values = p_values[non_nan_mask]
 
@@ -100,11 +101,11 @@ def holm_bonf_correction(p_values):
     return final_corrected
 
 def perform_statistical_analysis(
-    root_dir: str, 
-    seeds: range, 
-    algorithm_dicts: Dict, 
-    metrics_list: List[str], 
-    main_algo_key: str, 
+    root_dir: str,
+    seeds: List[int],
+    algorithm_dicts: Dict,
+    metrics_list: List[str],
+    main_algo_key: str,
     output_dir: str
 ):
     """
@@ -141,12 +142,12 @@ def perform_statistical_analysis(
             comp_vals = np.array(final_data[metric].get(algo_key, []))
             
             # Ensure we have matching lengths for paired Wilcoxon
-            # We truncate to the minimum length (assuming seeds align 1, 2, 3...)
+            # We truncate to the minimum length (assuming seeds align across algorithms)
             min_len = min(len(main_vals), len(comp_vals))
             
             if min_len >= 2:
                 try:
-                    # Using Wilcoxon (Paired)
+                    # Paired Wilcoxon signed-rank test
                     stat, p = wilcoxon(main_vals[:min_len], comp_vals[:min_len])
                     p_values.append(p)
                     comparisons.append(algo_key)
@@ -160,7 +161,7 @@ def perform_statistical_analysis(
         if not p_values:
             continue
 
-        # Apply Holm-Bonferroni Correction (Manual)
+        # Apply Holm-Bonferroni correction
         corrected_pvals = holm_bonf_correction(p_values)
 
         # Store results
@@ -201,3 +202,19 @@ def perform_statistical_analysis(
         print(f"\nStats saved to: {csv_path}")
     else:
         print("No statistical results generated.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Wilcoxon tests with Holm-Bonferroni correction on final metrics.")
+    config.add_model_argument(parser)
+    args = parser.parse_args()
+
+    cfg = config.get_model_config(args.model)
+    perform_statistical_analysis(
+        root_dir=cfg["root_dir"],
+        seeds=cfg["seeds"],
+        algorithm_dicts=cfg["algorithms"],
+        metrics_list=["avg_pairwise_dist", "total_fitnesses", "num_solutions"],
+        main_algo_key=config.BASE_ALGO_KEY,
+        output_dir=cfg["output_dir"],
+    )
