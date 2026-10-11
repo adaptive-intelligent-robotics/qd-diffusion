@@ -52,3 +52,5 @@ Thumbs.db
 old_code/
 run_multiple.sh
 apptainer/var_tmp/
+*.pth
+models/pretrained.zip
